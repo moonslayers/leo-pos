@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#be185d">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Leonides POS</title>
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="apple-touch-icon" href="./icon-192.png">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💄</text></svg>">
+<style>
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+button{font-family:inherit;touch-action:manipulation;cursor:pointer}
+input,select{font-family:inherit}
+body{font-family:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;background:#fdf2f8;color:#111827;overscroll-behavior-y:none}
+header{position:sticky;top:0;z-index:30;background:linear-gradient(120deg,#be185d,#7c3aed);color:#fff;padding:12px 16px;padding-top:calc(12px + env(safe-area-inset-top));display:flex;justify-content:space-between;align-items:center;box-shadow:0 2px 10px rgba(190,24,93,.3)}
+header h1{font-size:17px;letter-spacing:.3px}
+main{max-width:560px;margin:0 auto;padding:12px 12px calc(92px + env(safe-area-inset-bottom))}
+.view{display:none}.view.active{display:block}
+.card{background:#fff;border-radius:14px;padding:13px;margin-bottom:10px;box-shadow:0 1px 3px rgba(0,0,0,.07)}
+h3{font-size:14px;margin-bottom:8px}
+label{display:block;font-size:12px;font-weight:600;color:#6b7280;margin:8px 0 4px}
+input,select{width:100%;padding:11px 12px;border:1.5px solid #e5e7eb;border-radius:10px;font-size:16px;background:#fff;color:#111827}
+input:focus,select:focus{outline:none;border-color:#ec4899}
+.btn{border:0;border-radius:12px;padding:12px 14px;font-size:15px;font-weight:700;color:#fff}
+.btn-primary{background:linear-gradient(120deg,#ec4899,#8b5cf6)}
+.btn-green{background:#059669}.btn-amber{background:#d97706}.btn-wa{background:#25d366}
+.btn-outline{background:#fff;color:#be185d;border:1.5px solid #f9a8d4}
+.btn-danger{background:#dc2626}
+.btn-danger-ghost{background:#fef2f2;color:#dc2626;border:1.5px solid #fecaca}
+.btn:active{transform:scale(.97);opacity:.9}
+.link-btn{background:none;border:0;color:#9ca3af;font-size:12px;text-decoration:underline}
+.fila-prod{display:flex;align-items:center;gap:10px}
+.p-nom{font-weight:700;font-size:14.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.p-meta{font-size:12px;color:#6b7280;margin-top:2px}
+.p-precio{font-size:16px;font-weight:800;color:#be185d;margin-top:2px}
+.chip{display:inline-block;padding:1px 8px;border-radius:999px;font-size:10.5px;font-weight:600}
+.stock{font-size:11px;font-weight:600}
+.rojo{color:#dc2626}.naranja{color:#d97706}.verde{color:#059669}
+.btn-add{width:42px;height:42px;border-radius:50%;border:0;background:linear-gradient(120deg,#ec4899,#8b5cf6);color:#fff;font-size:22px;font-weight:700;flex-shrink:0;box-shadow:0 2px 6px rgba(236,72,153,.4)}
+.btn-add:active{transform:scale(.9)}
+.stock-badge{min-width:54px;text-align:center;font-weight:800;font-size:16px;padding:6px 4px;border-radius:10px;background:#f9fafb}
+.stock-badge.rojo{background:#fef2f2}.stock-badge.naranja{background:#fffbeb}.stock-badge.verde{background:#ecfdf5}
+.cart-item{display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid #f3f4f6}
+.ci-nom{font-size:13.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ci-precio{font-size:11.5px;color:#9ca3af}
+.ci-total{font-weight:700;font-size:13.5px;min-width:62px;text-align:right}
+.ci-del{background:none;border:0;color:#9ca3af;font-size:15px;padding:4px}
+.qty{display:flex;align-items:center;gap:2px;background:#fdf2f8;border-radius:999px;padding:2px}
+.qty button{width:28px;height:28px;border-radius:50%;border:0;background:#fff;font-size:16px;font-weight:700;color:#be185d;box-shadow:0 1px 2px rgba(0,0,0,.12)}
+.qty span{min-width:22px;text-align:center;font-weight:700;font-size:14px}
+.fila-cliente{display:flex;align-items:center;gap:10px;cursor:pointer}
+.fila-cliente:active{background:#fdf2f8}
+.deuda{font-weight:800;color:#dc2626;font-size:17px;text-align:right}
+.mov{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #f3f4f6}
+.mov-t{font-size:13px;font-weight:700}
+.mov-f{font-size:11px;color:#9ca3af;font-weight:400}
+.mov-d{font-size:11.5px;color:#6b7280;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mov-m{font-weight:800;font-size:13.5px;white-space:nowrap}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px}
+.stat{padding:12px;margin-bottom:0}
+.stat-l{font-size:11.5px;color:#6b7280;font-weight:600}
+.stat-v{font-size:19px;font-weight:800;margin-top:3px}
+.stat-s{font-size:10.5px;color:#9ca3af;margin-top:2px}
+#chart{display:flex;gap:6px;height:150px;margin-top:8px}
+.bar-col{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;min-width:0}
+.bar-val{font-size:9px;color:#6b7280;height:12px}
+.bar-wrap{flex:1;width:100%;display:flex;align-items:flex-end}
+.bar{width:100%;background:linear-gradient(180deg,#ec4899,#a855f7);border-radius:6px 6px 2px 2px;min-height:3px}
+.bar-day{font-size:10px;color:#9ca3af;text-transform:capitalize}
+.cat-row{margin-bottom:9px}
+.cat-top{display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:3px;gap:6px}
+.cat-bar-bg{height:8px;background:#f3f4f6;border-radius:99px;overflow:hidden}
+.cat-bar{height:100%;border-radius:99px}
+.bajo-row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f3f4f6;font-size:13.5px;gap:8px}
+.stat-row{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid #f3f4f6;font-size:14px}
+.hint{font-size:12.5px;color:#6b7280;margin-bottom:10px;line-height:1.45}
+nav.bottom{position:fixed;bottom:0;left:0;right:0;background:#fff;display:flex;box-shadow:0 -2px 12px rgba(0,0,0,.08);z-index:40;padding-bottom:env(safe-area-inset-bottom)}
+.tab{flex:1;border:0;background:none;padding:9px 2px 7px;font-size:10px;color:#9ca3af;display:flex;flex-direction:column;align-items:center;gap:1px;font-weight:600}
+.tab .ic{font-size:21px;line-height:1}
+.tab.active{color:#be185d}
+.modal{position:fixed;inset:0;background:rgba(17,24,39,.55);display:none;align-items:flex-end;justify-content:center;z-index:50}
+.modal.open{display:flex}
+.modal-card{background:#fff;width:100%;max-width:560px;max-height:92vh;max-height:92dvh;overflow-y:auto;border-radius:20px 20px 0 0;padding:16px 16px calc(18px + env(safe-area-inset-bottom));animation:subir .22s ease-out}
+@keyframes subir{from{transform:translateY(40px);opacity:.6}to{transform:none;opacity:1}}
+.modal-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.scan-close{position:absolute;top:10px;right:10px;width:34px;height:34px;border-radius:50%;border:0;background:rgba(0,0,0,.55);color:#fff;font-size:15px;z-index:2}
+.scan-frame{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:80%;height:120px;border:2.5px solid #ec4899;border-radius:12px;box-shadow:0 0 0 9999px rgba(0,0,0,.3);pointer-events:none}
+#toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(84px + env(safe-area-inset-bottom));background:#111827;color:#fff;padding:10px 18px;border-radius:999px;font-size:13.5px;opacity:0;pointer-events:none;transition:opacity .25s;z-index:100;max-width:88%;text-align:center}
+#toast.show{opacity:1}
+#btnAyuda{position:fixed;right:14px;bottom:calc(80px + env(safe-area-inset-bottom));width:52px;height:52px;border-radius:50%;border:0;background:linear-gradient(120deg,#f59e0b,#ec4899);color:#fff;font-size:23px;box-shadow:0 4px 14px rgba(236,72,153,.5);z-index:45;display:flex;align-items:center;justify-content:center}
+#btnAyuda:active{transform:scale(.9)}
+/* Condiciones del fiado */
+.plan-btn{flex:1;padding:11px 6px;border-radius:12px;border:1.5px solid #e5e7eb;background:#fff;font-weight:700;font-size:14px;color:#6b7280}
+.plan-btn.plan-activo{border-color:#d97706;background:#fffbeb;color:#b45309;box-shadow:0 0 0 1px #d97706 inset}
+.chip-btn{flex:1;padding:8px 2px;border-radius:10px;border:1.5px solid #e5e7eb;background:#fff;font-size:12.5px;font-weight:600;color:#6b7280}
+.chip-btn:active{background:#fdf2f8;border-color:#f9a8d4}
+/* ===== Guías interactivas (motor propio, sin dependencias) ===== */
+#tourWrap{position:fixed;inset:0;z-index:70}
+#tourSpot{position:absolute;border-radius:16px;border:2.5px solid #ec4899;box-shadow:0 0 0 9999px rgba(17,24,39,.68);pointer-events:none;transition:top .25s ease,left .25s ease,width .25s ease,height .25s ease}
+#tourCard{position:absolute;left:12px;right:12px;margin:0 auto;max-width:420px;background:#fff;border-radius:18px;padding:18px 16px 14px;box-shadow:0 12px 34px rgba(0,0,0,.4);animation:subir .2s ease-out}
+#tourTitulo{font-size:16px;font-weight:800;color:#be185d;margin-bottom:6px;padding-right:28px}
+#tourTexto{font-size:13.5px;line-height:1.55;color:#374151}
+#tourPie{display:flex;justify-content:space-between;align-items:center;margin-top:14px}
+#tourContador{font-size:11.5px;color:#9ca3af;font-weight:600}
+.tour-btn{border:0;border-radius:10px;padding:9px 16px;font-size:13px;font-weight:700;background:linear-gradient(120deg,#ec4899,#8b5cf6);color:#fff}
+.tour-btn:active{opacity:.85}
+.tour-btn-sec{background:#f3f4f6;color:#6b7280}
+#tourCerrar{position:absolute;top:10px;right:10px;width:30px;height:30px;border-radius:50%;border:0;background:#f3f4f6;color:#6b7280;font-size:14px;font-weight:700}
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>💄 Leonides POS</h1>
+    <div style="font-size:10.5px;opacity:.85">Lencería Ilusión · Perfumes Fraiche · Cosméticos</div>
+  </div>
+  <div id="hdrFecha" style="font-size:10.5px;text-align:right;max-width:110px"></div>
+</header>
+
+<main>
+  <!-- ============ VENTAS ============ -->
+  <section id="v-ventas" class="view active">
+    <div class="card" id="filaBusqueda">
+      <div style="display:flex;gap:8px">
+        <input id="buscarVenta" placeholder="Buscar producto o código…" style="flex:1">
+        <button class="btn btn-primary" style="max-width:110px" onclick="abrirScanner('venta')">📷 Escanear</button>
+      </div>
+    </div>
+    <div class="card" id="carritoCard">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <h3 style="margin:0">🛒 Carrito</h3>
+        <button class="link-btn" onclick="vaciarCarrito()">Vaciar</button>
+      </div>
+      <div id="carritoCont"></div>
+      <div id="carritoAcciones" style="display:none;margin-top:10px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <span style="font-size:14px;color:#6b7280">Total:</span>
+          <span id="cartTotal" style="font-size:24px;font-weight:800;color:#be185d">$0.00</span>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-green" style="flex:1" onclick="cobrarContado()">💵 Contado</button>
+          <button class="btn btn-amber" style="flex:1" onclick="iniciarFiado()">📓 Fiado</button>
+        </div>
+      </div>
+    </div>
+    <div id="listaVentaProductos"></div>
+  </section>
+
+  <!-- ============ PRODUCTOS ============ -->
+  <section id="v-productos" class="view">
+    <div class="card" id="cardBusquedaProd">
+      <div style="display:flex;gap:8px">
+        <input id="buscarProducto" placeholder="Buscar…" style="flex:1">
+        <button class="btn btn-primary" style="max-width:110px" onclick="nuevoProducto()">＋ Nuevo</button>
+      </div>
+      <div id="numProductos" style="font-size:11.5px;color:#9ca3af;margin-top:6px"></div>
+    </div>
+    <div id="listaProductos"></div>
+  </section>
+
+  <!-- ============ FIADOS ============ -->
+  <section id="v-fiados" class="view">
+    <div class="card" id="cardPorCobrar" style="text-align:center;background:linear-gradient(135deg,#fff7ed,#ffedd5)">
+      <div style="font-size:12px;color:#9a3412;font-weight:600">💰 Total por cobrar</div>
+      <div id="totalPorCobrar" style="font-size:30px;font-weight:800;color:#c2410c">$0.00</div>
+    </div>
+    <button class="btn btn-outline" style="width:100%;margin-bottom:10px" onclick="abrirModalClienteNuevo()">👤 Nuevo cliente</button>
+    <div id="listaFiados"></div>
+  </section>
+
+  <!-- ============ DASHBOARD ============ -->
+  <section id="v-dashboard" class="view">
+    <div class="grid2" id="gridStats">
+      <div class="card stat"><div class="stat-l">💵 Ingresos de hoy</div><div class="stat-v" id="stIngresos" style="color:#059669">$0</div><div class="stat-s" id="stIngresosDet"></div></div>
+      <div class="card stat"><div class="stat-l">🧾 Ventas de hoy</div><div class="stat-v" id="stVentasHoy">$0</div><div class="stat-s" id="stVentasHoyDet"></div></div>
+      <div class="card stat"><div class="stat-l">📓 Por cobrar</div><div class="stat-v" id="stPorCobrar" style="color:#dc2626">$0</div><div class="stat-s" id="stPorCobrarDet"></div></div>
+      <div class="card stat"><div class="stat-l">📦 Inventario</div><div class="stat-v" id="stInventario">$0</div><div class="stat-s" id="stInventarioDet"></div></div>
+    </div>
+    <div class="card" id="cardChart"><h3>📈 Ventas últimos 7 días</h3><div id="chart"></div></div>
+    <div class="card"><h3>🏷 Ventas por categoría (este mes)</h3><div id="catVentas"></div></div>
+    <div class="card" id="cardStockBajo"><h3>⚠️ Stock bajo (3 o menos piezas)</h3><div id="stockBajo"></div></div>
+  </section>
+
+  <!-- ============ AJUSTES ============ -->
+  <section id="v-ajustes" class="view">
+    <div class="card" id="cardRespaldo">
+      <h3>💾 Respaldo de datos</h3>
+      <p class="hint">Exporta todo (productos, ventas, clientes y abonos) a un archivo .json que puedes guardar o compartir por WhatsApp. Al importar, los datos actuales se reemplazan por los del archivo.</p>
+      <button class="btn btn-primary" style="width:100%;margin-bottom:8px" onclick="exportar()">⬇️ Exportar respaldo</button>
+      <button class="btn btn-outline" style="width:100%" onclick="document.getElementById('fileImport').click()">⬆️ Importar respaldo</button>
+      <input type="file" id="fileImport" accept=".json,application/json" style="display:none" onchange="importar(this)">
+    </div>
+    <div class="card" id="cardGuias">
+      <h3>💡 Guías interactivas</h3>
+      <p class="hint">Cada sección tiene una guía que te explica cómo usarla. Se muestra sola la primera vez, y el botón flotante 💡 la repite cuando quieras.</p>
+      <button class="btn btn-outline" style="width:100%;margin-bottom:8px" onclick="iniciarTour(vistaActual,true)">▶️ Ver guía de esta sección</button>
+      <button class="btn btn-outline" style="width:100%" onclick="reiniciarGuias()">🔄 Reiniciar todas las guías</button>
+    </div>
+    <div class="card"><h3>🗂 Datos guardados</h3><div id="stats"></div></div>
+    <div class="card">
+      <h3>📷 Escáner de códigos</h3>
+      <p class="hint" id="infoScanner"></p>
+      <p class="hint">Consejo: funciona mejor con buena luz y el código bien centrado. Si tu teléfono no lo soporta, puedes escribir el código a mano.</p>
+    </div>
+    <div class="card">
+      <h3>🎨 Datos de ejemplo</h3>
+      <p class="hint">¿Primera vez? Carga productos de ejemplo para probar la app (los puedes borrar o editar después).</p>
+      <button class="btn btn-outline" style="width:100%" onclick="cargarEjemplo()">Cargar ejemplo</button>
+    </div>
+    <div class="card" id="cardPeligro" style="background:#fef2f2">
+      <h3 style="color:#dc2626">⚠️ Zona de peligro</h3>
+      <button class="btn btn-danger" style="width:100%" onclick="borrarTodo()">🗑 Borrar todos los datos</button>
+    </div>
+    <p style="text-align:center;font-size:11px;color:#9ca3af;margin-top:14px">Leonides POS v1.3 · Hecho con 💖 · Los datos se guardan solo en este teléfono</p>
+  </section>
+</main>
+
+<nav class="bottom">
+  <button class="tab active" data-v="ventas" onclick="mostrarVista('ventas')"><span class="ic">🛒</span>Ventas</button>
+  <button class="tab" data-v="productos" onclick="mostrarVista('productos')"><span class="ic">📦</span>Productos</button>
+  <button class="tab" data-v="fiados" onclick="mostrarVista('fiados')"><span class="ic">📓</span>Fiados</button>
+  <button class="tab" data-v="dashboard" onclick="mostrarVista('dashboard')"><span class="ic">📊</span>Resumen</button>
+  <button class="tab" data-v="ajustes" onclick="mostrarVista('ajustes')"><span class="ic">⚙️</span>Ajustes</button>
+</nav>
+
+<button id="btnAyuda" onclick="iniciarTour(vistaActual,true)" aria-label="Ayuda">💡</button>
+
+<!-- Modal escáner -->
+<div id="mScanner" class="modal">
+  <div class="modal-card" style="padding:0;overflow:hidden">
+    <div style="position:relative;background:#000">
+      <video id="scanVideo" playsinline muted style="width:100%;height:260px;object-fit:cover;display:block"></video>
+      <div class="scan-frame"></div>
+      <button class="scan-close" onclick="cerrarScanner()">✕</button>
+    </div>
+    <div style="padding:14px">
+      <div id="scanMsg" style="font-size:13px;color:#6b7280;margin-bottom:6px">Apunta al código de barras…</div>
+      <div id="scanError" style="font-size:13px;color:#dc2626;margin-bottom:6px"></div>
+      <div style="display:flex;gap:8px">
+        <input id="scanManual" placeholder="O escribe el código aquí" inputmode="numeric">
+        <button class="btn btn-primary" style="max-width:70px" onclick="enviarCodigoManual()">OK</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal producto -->
+<div id="mProducto" class="modal">
+  <div class="modal-card">
+    <div class="modal-head"><h3 id="prodTitulo">Nuevo producto</h3><button class="ci-del" onclick="cerrarModal('mProducto')">✕</button></div>
+    <label>Código de barras</label>
+    <div style="display:flex;gap:8px">
+      <input id="fCodigo" placeholder="Ej. 7501234567890" inputmode="numeric">
+      <button class="btn btn-primary" style="max-width:60px" onclick="abrirScanner('producto-codigo')">📷</button>
+    </div>
+    <label>Nombre *</label>
+    <input id="fNombre" placeholder="Ej. Perfume Fraiche lavanda 50 ml">
+    <label>Categoría</label>
+    <select id="fCategoria">
+      <option value="ilusion">👙 Lencería Ilusión</option>
+      <option value="fraiche">🌺 Perfume Fraiche</option>
+      <option value="cosmeticos">💄 Cosméticos</option>
+      <option value="otros">📦 Otros</option>
+    </select>
+    <div style="display:flex;gap:8px">
+      <div style="flex:1"><label>Precio venta *</label><input id="fPrecio" inputmode="decimal" placeholder="0.00"></div>
+      <div style="flex:1"><label>Costo</label><input id="fCosto" inputmode="decimal" placeholder="0.00"></div>
+      <div style="flex:1"><label>Stock</label><input id="fStock" inputmode="numeric" placeholder="0"></div>
+    </div>
+    <div style="display:flex;gap:6px;margin-top:8px">
+      <button class="btn btn-outline" style="flex:1;padding:8px" onclick="ajustarStock(-1)">−1</button>
+      <button class="btn btn-outline" style="flex:1;padding:8px" onclick="ajustarStock(1)">+1</button>
+      <button class="btn btn-outline" style="flex:1;padding:8px" onclick="ajustarStock(5)">+5</button>
+      <button class="btn btn-outline" style="flex:1;padding:8px" onclick="ajustarStock(10)">+10</button>
+    </div>
+    <button class="btn btn-primary" style="width:100%;margin-top:14px" onclick="guardarProducto()">💾 Guardar</button>
+    <button id="btnEliminarProducto" class="btn btn-danger-ghost" style="width:100%;margin-top:8px;display:none" onclick="eliminarProducto()">🗑 Eliminar producto</button>
+  </div>
+</div>
+
+<!-- Modal elegir cliente para fiado -->
+<div id="mClientes" class="modal">
+  <div class="modal-card">
+    <div class="modal-head"><h3>📓 Venta fiada · Paso 1 de 2</h3><button class="ci-del" onclick="cerrarModal('mClientes')">✕</button></div>
+    <p style="font-size:14px;margin-bottom:4px">Total de la venta: <b id="fiadoTotal" style="color:#be185d;font-size:18px"></b></p>
+    <p style="font-size:12.5px;color:#6b7280;margin-bottom:6px">¿A quién le fiamos? Después te pregunto el abono inicial y el plan de pago.</p>
+    <label>Cliente nuevo</label>
+    <div style="display:flex;gap:8px;margin-bottom:8px">
+      <input id="nuevoClienteFiado" placeholder="Nombre">
+      <input id="nuevoClienteFiadoTel" placeholder="Tel." style="max-width:110px" inputmode="tel">
+    </div>
+    <button class="btn btn-primary" style="width:100%" onclick="crearClienteYFiar()">Crear y continuar ➜</button>
+    <div style="margin:12px 0 8px;color:#6b7280;font-size:13px">O toca un cliente existente:</div>
+    <div id="listaClientesFiado"></div>
+  </div>
+</div>
+
+<!-- Modal condiciones del fiado -->
+<div id="mCondiciones" class="modal">
+  <div class="modal-card">
+    <div class="modal-head"><h3>📓 Condiciones del fiado · Paso 2 de 2</h3><button class="ci-del" onclick="cerrarModal('mCondiciones')">✕</button></div>
+    <div style="background:#fdf2f8;border-radius:12px;padding:10px 12px;font-size:13.5px;margin-bottom:4px">
+      <div style="display:flex;justify-content:space-between"><span>👤 Cliente</span><b id="condCliente"></b></div>
+      <div style="display:flex;justify-content:space-between;margin-top:3px"><span>🧾 Total de la venta</span><b id="condTotal" style="color:#be185d"></b></div>
+      <div style="display:flex;justify-content:space-between;margin-top:3px"><span>📓 Quedará debiendo</span><b id="condSaldo" style="color:#dc2626">$0.00</b></div>
+    </div>
+
+    <label>💵 ¿Da un abono inicial ahora? (opcional)</label>
+    <input id="condAbono" inputmode="decimal" placeholder="0.00" style="font-size:20px;font-weight:700;text-align:center" oninput="actualizarResumenCondiciones()">
+    <div style="display:flex;gap:6px;margin-top:6px">
+      <button class="chip-btn" onclick="setAbonoChip('')">Sin abono</button>
+      <button class="chip-btn" onclick="setAbonoChip('50')">$50</button>
+      <button class="chip-btn" onclick="setAbonoChip('100')">$100</button>
+      <button class="chip-btn" onclick="setAbonoChip('200')">$200</button>
+      <button class="chip-btn" onclick="setAbonoChip('mitad')">La mitad</button>
+    </div>
+
+    <label>📅 ¿Cómo va a liquidar?</label>
+    <div style="display:flex;gap:8px">
+      <button id="planUno" class="plan-btn plan-activo" onclick="elegirPlan('uno')">💵 En 1 solo pago</button>
+      <button id="planParcial" class="plan-btn" onclick="elegirPlan('parcial')">🗓 En partes</button>
+    </div>
+    <div id="filaNumPagos" style="display:none;margin-top:6px">
+      <label>¿En cuántas partes?</label>
+      <div style="display:flex;align-items:center;gap:8px">
+        <button class="btn btn-outline" style="padding:10px 16px" onclick="cambiarNumPagos(-1)">−</button>
+        <input id="condNumPagos" inputmode="numeric" value="2" style="text-align:center;max-width:80px" oninput="actualizarResumenCondiciones()">
+        <button class="btn btn-outline" style="padding:10px 16px" onclick="cambiarNumPagos(1)">＋</button>
+        <span id="condPorPago" style="font-size:13px;color:#6b7280;flex:1"></span>
+      </div>
+    </div>
+
+    <label>🔁 ¿Cada cuánto pagará? (opcional)</label>
+    <select id="condFrecuencia" onchange="frecuenciaCambio()">
+      <option value="">Sin especificar</option>
+      <option value="semanal">Cada semana</option>
+      <option value="quincenal">Cada quincena</option>
+      <option value="mensual">Cada mes</option>
+    </select>
+
+    <label>📆 Fecha del siguiente pago (opcional)</label>
+    <input type="date" id="condFecha">
+    <div style="display:flex;gap:6px;margin-top:6px">
+      <button class="chip-btn" onclick="setFechaChip(0)">Hoy</button>
+      <button class="chip-btn" onclick="setFechaChip(7)">En 1 semana</button>
+      <button class="chip-btn" onclick="setFechaChip(15)">En 15 días</button>
+      <button class="chip-btn" onclick="setFechaChip(30)">En 1 mes</button>
+    </div>
+
+    <button class="btn btn-amber" style="width:100%;margin-top:16px" onclick="registrarFiado()">📓 Registrar fiado</button>
+  </div>
+</div>
+
+<!-- Modal detalle cliente -->
+<div id="mClienteDetalle" class="modal">
+  <div class="modal-card">
+    <div class="modal-head"><h3 id="dcNombre">Cliente</h3><button class="ci-del" onclick="cerrarModal('mClienteDetalle')">✕</button></div>
+    <div id="dcTel" style="font-size:13px;color:#6b7280"></div>
+    <div style="text-align:center;margin:10px 0">
+      <div style="font-size:12px;color:#6b7280">Debe</div>
+      <div id="dcDeuda" style="font-size:30px;font-weight:800">$0</div>
+    </div>
+    <div id="dcPlan" style="display:none;background:#fffbeb;border:1.5px solid #fde68a;border-radius:12px;padding:10px 12px;font-size:13px;margin-bottom:10px;line-height:1.5"></div>
+    <div style="display:flex;gap:8px;margin-bottom:12px">
+      <button id="btnAbonar" class="btn btn-green" style="flex:1">💰 Abonar</button>
+      <button id="btnWhatsApp" class="btn btn-wa" style="flex:1">📱 Recordar</button>
+    </div>
+    <h4 style="font-size:13px;color:#6b7280;margin-bottom:4px">Movimientos</h4>
+    <div id="dcMovs"></div>
+    <button id="btnEliminarCliente" class="btn btn-danger-ghost" style="width:100%;margin-top:12px" onclick="eliminarCliente()">🗑 Eliminar cliente y movimientos</button>
+  </div>
+</div>
+
+<!-- Modal abono -->
+<div id="mAbono" class="modal">
+  <div class="modal-card">
+    <div class="modal-head"><h3>💰 Registrar abono</h3><button class="ci-del" onclick="cerrarModal('mAbono')">✕</button></div>
+    <label>Monto</label>
+    <input id="abonoMonto" inputmode="decimal" style="font-size:22px;font-weight:700;text-align:center">
+    <button class="btn btn-primary" style="width:100%;margin-top:12px" onclick="guardarAbono()">Guardar abono</button>
+  </div>
+</div>
+
+<!-- Modal cliente nuevo -->
+<div id="mClienteNuevo" class="modal">
+  <div class="modal-card">
+    <div class="modal-head"><h3>👤 Nuevo cliente</h3><button class="ci-del" onclick="cerrarModal('mClienteNuevo')">✕</button></div>
+    <label>Nombre *</label><input id="ncNombre" placeholder="Nombre del cliente">
+    <label>Teléfono (para recordatorio por WhatsApp)</label><input id="ncTel" inputmode="tel" placeholder="10 dígitos">
+    <button class="btn btn-primary" style="width:100%;margin-top:12px" onclick="guardarClienteNuevo()">Guardar</button>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script type="module" src="/src/main.ts"></script>
+</body>
+</html>
+
