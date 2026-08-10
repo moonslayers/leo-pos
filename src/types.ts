@@ -89,3 +89,45 @@ export interface Movimiento {
   id: number;
   det: string;
 }
+
+// ---------- Sincronización Firebase Firestore ----------
+
+export interface SyncConfig {
+  apiKey?: string;
+  projectId?: string;
+  appId?: string;
+  authDomain?: string;
+  storageBucket?: string;
+  messagingSenderId?: string;
+  measurementId?: string;
+  syncToken: string;
+  deviceId: string;
+  intervalMin?: number;
+}
+
+export interface SyncMeta {
+  version: 1;
+  deviceId: string;
+  gids: Partial<Record<StoreName, Record<number, string>>>;
+  updatedAt?: Partial<Record<StoreName, Record<string, number>>>;
+  lastSyncAt?: number;
+  lastPushAt?: number;
+  lastPullAt?: number;
+}
+
+export interface SyncDoc<T = unknown> {
+  data: T;
+  _gid: string;
+  _dev: string;
+  _updatedAt: number;
+  _deleted?: boolean;
+}
+
+export interface SyncResult {
+  ok: boolean;
+  subidos: number;
+  importados: number;
+  errores: number;
+  fallidas?: string[];
+  mensaje: string;
+}

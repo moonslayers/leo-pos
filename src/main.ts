@@ -9,6 +9,7 @@ import { initProductos, onCodeForProducto, onProductsChanged } from './ui/produc
 import { initFiados } from './ui/fiados';
 import { initDashboard } from './ui/dashboard';
 import { initAjustes } from './ui/ajustes';
+import { initSync } from './ui/sync';
 import {
   agregarCarrito,
   cambiarQty,
@@ -54,6 +55,7 @@ async function agregarCarritoGlobal(id: number): Promise<void> {
   initFiados();
   initDashboard();
   initAjustes();
+  initSync();
 
   window.agregarCarrito = agregarCarritoGlobal;
   registerCartOps({

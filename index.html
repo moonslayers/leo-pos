@@ -237,6 +237,10 @@ nav.bottom{position:fixed;bottom:0;left:0;right:0;background:#fff;display:flex;b
       <button class="btn btn-outline" style="width:100%" onclick="document.getElementById('fileImport').click()">⬆️ Importar respaldo</button>
       <input type="file" id="fileImport" accept=".json,application/json" style="display:none" onchange="importar(this)">
     </div>
+    <div class="card" id="cardSync">
+      <h3>🔁 Sincronización</h3>
+      <div id="syncStatus"></div>
+    </div>
     <div class="card" id="cardGuias">
       <h3>💡 Guías interactivas</h3>
       <p class="hint">Cada sección tiene una guía que te explica cómo usarla. Se muestra sola la primera vez, y el botón flotante 💡 la repite cuando quieras.</p>
