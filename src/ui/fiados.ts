@@ -127,17 +127,17 @@ async function abrirDetalleCliente(id: number): Promise<void> {
   const planDiv = $('dcPlan');
   if (det.planDiv) {
     planDiv.innerHTML = det.planDiv;
-    planDiv.style.display = 'block';
-  } else planDiv.style.display = 'none';
+    planDiv.classList.remove('oculto');
+  } else planDiv.classList.add('oculto');
   $('dcMovs').innerHTML = det.movs.length
     ? det.movs.map(m => filaMovHtml(m, id)).join('')
     : '<div style="color:#9ca3af;text-align:center;padding:10px;font-size:13px">Sin movimientos</div>';
   $('btnAbonar').onclick = () => window.abrirAbono(id, det.deuda);
   const wa = $('btnWhatsApp');
   if (det.cliente.telefono && det.deuda > 0) {
-    wa.style.display = 'block';
+    wa.classList.remove('oculto');
     wa.onclick = () => window.recordarWhatsApp(det.cliente, det.deuda);
-  } else wa.style.display = 'none';
+  } else wa.classList.add('oculto');
   abrirModal('mClienteDetalle');
 }
 

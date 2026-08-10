@@ -75,7 +75,7 @@ export function nuevoProducto(codigo?: string): void {
   ($('fPrecio') as HTMLInputElement).value = '';
   ($('fCosto') as HTMLInputElement).value = '';
   ($('fStock') as HTMLInputElement).value = '1';
-  $('btnEliminarProducto').style.display = 'none';
+  $('btnEliminarProducto').classList.add('oculto');
   abrirModal('mProducto');
 }
 
@@ -90,7 +90,7 @@ export async function editarProducto(id: number): Promise<void> {
   ($('fPrecio') as HTMLInputElement).value = p.precio != null ? String(p.precio) : '';
   ($('fCosto') as HTMLInputElement).value = p.costo != null ? String(p.costo) : '';
   ($('fStock') as HTMLInputElement).value = p.stock != null ? String(p.stock) : '0';
-  $('btnEliminarProducto').style.display = 'block';
+  $('btnEliminarProducto').classList.remove('oculto');
   abrirModal('mProducto');
 }
 

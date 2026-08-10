@@ -152,7 +152,7 @@ function elegirPlan(p: PlanPago): void {
   fiadoElegirPlan(p);
   $('planUno').classList.toggle('plan-activo', p === 'uno');
   $('planParcial').classList.toggle('plan-activo', p === 'parcial');
-  $('filaNumPagos').style.display = p === 'parcial' ? 'block' : 'none';
+  $('filaNumPagos').classList.toggle('oculto', p !== 'parcial');
   actualizarResumenCondiciones();
 }
 

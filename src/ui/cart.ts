@@ -32,10 +32,10 @@ export function renderCarrito(): void {
   if (!carrito.length) {
     cont.innerHTML =
       '<div style="color:#9ca3af;text-align:center;padding:8px;font-size:13px">Carrito vacío — agrega con ＋ o escanea 📷</div>';
-    $('carritoAcciones').style.display = 'none';
+    $('carritoAcciones').classList.add('oculto');
     return;
   }
-  $('carritoAcciones').style.display = 'block';
+  $('carritoAcciones').classList.remove('oculto');
   $('cartTotal').textContent = fmt(ops.totalCarrito());
   cont.innerHTML = carrito
     .map(
