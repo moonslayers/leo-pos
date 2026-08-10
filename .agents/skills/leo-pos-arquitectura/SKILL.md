@@ -18,7 +18,7 @@ Capturar la arquitectura del proyecto leo-pos (POS "Leonides POS" para negocio d
 ## Stack
 
 - **Vite 6** + **TypeScript strict** (`noUnusedLocals` / `noUnusedParameters`).
-- Cero dependencias de runtime (solo vanilla TS). `package.json` sin deps en `dependencies`.
+- Única dependencia de runtime: `firebase@^12.17.1` (solo para el sync, carga lazy en chunk aparte — ver skill `leo-pos-sync-firebase`). Sigue siendo vanilla TS sin framework.
 - `vite.config.ts` solo define `base: './'`.
 
 ## Estructura de archivos
@@ -30,10 +30,12 @@ src/
 │                          #   DeudaCliente, Movimiento, PlanPago, Frecuencia, StoreName, Vista, TourStep)
 ├── types/browser.d.ts     # Ambient declarations (BarcodeDetector)
 ├── core/
-│   ├── constants.ts       # CATS, catInfo, FREQ_TXT, DB_NAME, DB_VERSION, STORES, LS_KEY, TOUR_KEY
+│   ├── constants.ts       # CATS, catInfo, FREQ_TXT, DB_NAME, DB_VERSION, STORES, LS_KEY, TOUR_KEY,
+│   │                      #   SYNC_KEY, SYNC_META_KEY, RULES_TEMPLATE
 │   └── format.ts          # fmt, fmtF, fmtCorto, inicioDia, fechaLocal, esc
 ├── storage/               # Interfaz Storage + backends (ver skill leo-pos-storage-sync-mongo)
-├── services/              # products, sales, fiados, clients, backup — lógica PURA sin DOM
+├── services/              # products, sales, fiados, clients, backup, sync — lógica PURA sin DOM
+│                          #   sync = motor Firebase Firestore (ver skill leo-pos-sync-firebase)
 ├── features/
 │   ├── tours.ts           # Guías interactivas
 │   └── scanner.ts         # Escáner con BarcodeDetector
@@ -45,8 +47,10 @@ src/
     ├── productos.ts       # Vista productos (CRUD, scanner de producto)
     ├── fiados.ts          # Vista fiados (abonos, detalle cliente)
     ├── dashboard.ts       # Vista dashboard (estadísticas)
-    └── ajustes.ts         # Vista ajustes (backup, tours, import/export)
+    ├── ajustes.ts         # Vista ajustes (backup, tours, import/export)
+    └── sync.ts            # Card #cardSync en Ajustes (sync Firebase, window globals + timer)
 
+docs/                       # Guías de configuración externa (ej. SYNC_FIREBASE.md con setup Spark + rules)
 index.html                  # HTML shell casi intacto (vistas, modales, CSS, onclick inline).
                           #   TODO el CSS vive en su <style> (base móvil + bloque @media (min-width:1024px)
                           #   al final); los cambios de layout/CSS van ahí (ver skill leo-pos-responsive-desktop)

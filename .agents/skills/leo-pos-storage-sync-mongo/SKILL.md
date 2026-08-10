@@ -11,7 +11,7 @@ Documentar la capa de persistencia del POS Leonides y el punto exacto de costura
 ## Cuándo usarla
 
 - Antes de tocar cualquier lectura/escritura de datos.
-- Cuando se implemente el sync con MongoDB (próximo feature planeado).
+- Para entender el contrato `Storage` y el esquema IndexedDB (contexto de la re-idenciación del sync, ver skill `leo-pos-sync-firebase`).
 - Cuando se reporte un problema de guardado o de almacenamiento.
 - Al investigar cómo los datos llegan desde el backend hasta la UI.
 
@@ -57,15 +57,17 @@ DB `leonides_pos`, versión **1**; todas las stores con `keyPath: 'id'`, `autoIn
 
 ## TRAMPA CRÍTICA para el sync futuro — IDs
 
-Los IDs son **numéricos autoincrement por store** → dos dispositivos generan el mismo `id` (colisión). La capa de sync debe **re-idenciar** (prefijo de dispositivo o UUID) al importar. Diseñar esta estrategia ANTES de escribir el wrapper, y conservar referencias cruzadas (p. ej. `ventas` → `productoId`, `abonos` → `clienteId`).
+Los IDs son **numéricos autoincrement por store** → dos dispositivos generan el mismo `id` (colisión). La capa de sync debe **re-idenciar** (prefijo de dispositivo o UUID) al importar. Diseñar esta estrategia ANTES de escribir el wrapper, y conservar referencias cruzadas (p. ej. `ventas` → `productoId`, `abonos` → `clienteId`). **Esta trampa es la razón de la re-idenciación real del sync** (insertar sin id + remapeo de referencias en orden productos→clientes→ventas→abonos) — ver skill `leo-pos-sync-firebase`.
 
-## Diseño de sync aprobado por el usuario
+## Diseño de sync (HISTÓRICO — implementado con Firebase, no Mongo)
 
-- **Local-first siempre**: el navegador local es la fuente principal.
-- El **token de Mongo se guarda SOLO en localStorage** del navegador donde se activa (nunca en la nube).
-- Otro dispositivo con la misma key detecta que ya existe una base y **descarga/importa** los datos.
-- Implementar como **wrapper/decorator** sobre la interfaz `Storage` (patrón decorator) — SIN modificar `services/*` ni `src/ui/*`.
-- El export/import de respaldo JSON manual ya existe en Ajustes (`src/services/backup.ts`) para copia manual entre dispositivos.
+> **NOTA**: el sync real se implementó con **Firebase Firestore** — ver skill `leo-pos-sync-firebase`. El plan original de Mongo (Data API + wrapper decorator) quedó **obsoleto**: la MongoDB Atlas Data API de App Services se deprecó sept-2024 y se apagó el **30-sep-2025 (EOL)**. La capa `Storage` y el esquema IndexedDB documentados aquí siguen vigentes (son los backends que el motor de sync usa); lo que sigue a continuación es la propuesta que se descartó.
+
+- **Local-first siempre**: el navegador local es la fuente principal. (Se conservó en la implementación Firebase.)
+- El token de Mongo se guardaba SOLO en localStorage del navegador donde se activa (nunca en la nube). (En Firebase: el `syncToken` es segmento del path de Firestore y la config vive solo en localStorage.)
+- Otro dispositivo con la misma key detecta que ya existe una base y **descarga/importa** los datos. (Equivalente al pull de Firebase.)
+- Implementar como **wrapper/decorator** sobre la interfaz `Storage` (patrón decorator) — SIN modificar `services/*` ni `src/ui/*`. (Descartado: el motor Firebase vive en `src/services/sync.ts` y consulta `Storage` directamente.)
+- El export/import de respaldo JSON manual ya existe en Ajustes (`src/services/backup.ts`) para copia manual entre dispositivos. (Sigue vigente.)
 
 ## Errores comunes / trampas
 
