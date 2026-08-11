@@ -1,6 +1,6 @@
 ---
 name: leo-pos-sync-firebase
-description: Sincronización del POS Leonides entre dispositivos con Firebase Firestore — motor en src/services/sync.ts, config/meta en localStorage, lazy-loading de firebase, path pos/{syncToken}/{store}/{gid}, re-idenciación de IDs y merge anti-clobber. Úsala al tocar sync/Ajustes/Sincronización, al cambiar de proyecto Firebase, o al depurar datos duplicados/desaparecidos entre PC y celular.
+description: Sincronización del POS Leonides entre dispositivos con Firebase Firestore — motor en src/services/sync.ts, sync incremental bidireccional con LWW (dirty/dirtyDel, getDoc previo, anti-clobber), config/meta en localStorage, lazy-loading de firebase, path pos/{syncToken}/{store}/{gid}, re-idenciación de IDs. Úsala al tocar sync/Ajustes/Sincronización, al cambiar de proyecto Firebase, o al depurar datos duplicados/desaparecidos entre PC y celular.
 license: MIT
 ---
 
@@ -8,12 +8,14 @@ license: MIT
 
 Documentar la sincronización del POS Leonides (PC ↔ celular) con **Firebase Firestore**, implementada como feature real de la app. La sincronización es **local-first**: el navegador local es la fuente principal; la nube (Firestore) es el canal de intercambio entre dispositivos.
 
+**Modelo de consistencia**: sync **incremental bidireccional con LWW (last-write-wins)**. Ya NO es un full-repush ciego: cada dispositivo sube solo lo que cambió localmente (dirty-tracking) y nunca pisa un doc remoto más nuevo (`getDoc` previo + comparación de `_updatedAt`).
+
 **Contexto histórico**: el plan original era MongoDB Atlas (Data API + wrapper decorator sobre `Storage`, ver skill `leo-pos-storage-sync-mongo`), pero la MongoDB Atlas **Data API de App Services se deprecó sept-2024 y se apagó el 30-sep-2025 (EOL)** — ese plan es INVIABLE. Se migró a Firebase Firestore.
 
 ## Cuándo usarla
 
-- Antes de tocar cualquier cosa de sync: `src/services/sync.ts`, `src/ui/sync.ts`, la card `#cardSync` de Ajustes.
-- Al reportar datos duplicados, perdidos o sobrescritos entre dispositivos (bugs de merge/pull).
+- Antes de tocar cualquier cosa de sync: `src/services/sync.ts`, `src/ui/sync.ts`, `src/storage/index.ts` (hook de tracking), la card `#cardSync` de Ajustes.
+- Al reportar datos duplicados, perdidos o sobrescritos entre dispositivos (bugs de merge/pull, pisar ediciones de otro dispositivo).
 - Al cambiar de proyecto Firebase (otro projectId/token) o al activar el sync en un dispositivo nuevo.
 - Al modificar la plantilla de Security Rules o el setup de Firestore (`docs/SYNC_FIREBASE.md`).
 - Al agregar/depurar el auto-sync por timer o el botón "Sincronizar ahora".
@@ -21,15 +23,17 @@ Documentar la sincronización del POS Leonides (PC ↔ celular) con **Firebase F
 ## Arquitectura (archivos clave)
 
 ```
-src/services/sync.ts     # Motor de sync (PURA lógica, sin DOM)
+src/services/sync.ts     # Motor de sync (PURA lógica, sin DOM) — push selectivo + LWW, pull con anti-clobber, migración legacy
 src/ui/sync.ts           # Card #cardSync en Ajustes + window globals + timer auto-sync
-src/types.ts             # SyncConfig, SyncMeta, SyncResult, SyncDoc (líneas 95-130 aprox.)
-src/core/constants.ts    # SYNC_KEY, SYNC_META_KEY, RULES_TEMPLATE (líneas 8-9, 28-65)
+src/storage/index.ts     # Dirty-tracking: setSyncTrackingHook / sinTracking sobre el singleton getStorage()
+src/types.ts             # SyncConfig, SyncMeta (dirty/dirtyDel), SyncResult, SyncDoc
+src/core/constants.ts    # SYNC_KEY, SYNC_META_KEY, RULES_TEMPLATE
 docs/SYNC_FIREBASE.md    # Guía setup Spark + plantilla de rules (apunta a RULES_TEMPLATE como fuente de verdad)
 package.json             # firebase@^12.17.1 — ÚNICA dependencia de runtime del proyecto
 ```
 
-- **`src/services/sync.ts`**: funciones exportadas `generarCredenciales()`, `cargarConfig()`, `guardarConfig(): boolean`, `borrarConfig()`, `inicializarFirebase()`, `sincronizar()`. Config en localStorage, meta en key aparte, loader lazy de firebase.
+- **`src/services/sync.ts`**: funciones exportadas `generarCredenciales()`, `cargarConfig()`, `guardarConfig(): boolean`, `borrarConfig()`, `inicializarFirebase()`, `instalarTrackingSync()`, `sincronizar()`. Config en localStorage, meta en key aparte, loader lazy de firebase. Motor incremental + LWW: push selectivo (solo filas nuevas sin gid + `dirty`/`dirtyDel`), `getDoc` previo a cada `setDoc`, tombstones con timestamp real, migración legacy (full-push único).
+- **`src/storage/index.ts`**: costura del dirty-tracking (decorator `conTracking` sobre el backend real). `setSyncTrackingHook(hook)` registra el hook; `sinTracking(fn)` ejecuta `fn` con el tracking suprimido (contador `trackingDepth`). El hook se dispara tras `put`/`del` exitosos en AMBOS backends (IndexedDB y fallback localStorage) SOLO si `trackingDepth === 0`.
 - **`src/ui/sync.ts`**: `initSync()` cableado en `main.ts` (junto a `initAjustes()`). Expone window globals para los `onclick` inline de `index.html`: `guardarSyncConfig`, `sincronizarAhora`, `desconectarSync`, `copiarReglas`, `cambiarIntervaloSync`.
 - **`src/core/constants.ts`**: `SYNC_KEY = 'leonides_sync_v1'`, `SYNC_META_KEY = 'leonides_sync_meta_v1'`, `RULES_TEMPLATE` (plantilla compartida de Security Rules). La UI importa `RULES_TEMPLATE` y la doc apunta a ella — NO duplicar en otros sitios.
 - **`docs/SYNC_FIREBASE.md`**: guía de setup con plan Spark, path, plantilla de rules y limitaciones.
@@ -37,18 +41,43 @@ package.json             # firebase@^12.17.1 — ÚNICA dependencia de runtime d
 ## Modelo de datos en Firestore
 
 - **Path**: `pos/{syncToken}/{store}/{docId}`. El `syncToken` es **segmento del path** (no campo de documento) y es la llave compartida entre dispositivos.
-- **Shape del doc**: `SyncDoc<T> = { data: T; _gid: string; _dev: string; _updatedAt: number; _deleted?: boolean }`.
+- **Shape del doc**: `SyncDoc<T> = { data: T; _gid: string; _dev: string; _updatedAt: number; _deleted?: boolean }`. `_updatedAt` es el timestamp REAL del último cambio (del push local o del remoto) — es la clave del LWW.
 - **Stores** (4): `productos`, `clientes`, `ventas`, `abonos` (mismos nombres que las stores IndexedDB, ver skill `leo-pos-storage-sync-mongo`).
 - La config y el token se guardan SOLO en localStorage de cada dispositivo (nunca como campo de documento).
 
+## Modelo de datos local — `SyncMeta` + dirty-tracking
+
+La meta vive en localStorage (`SYNC_META_KEY = 'leonides_sync_meta_v1'`):
+
+- `gids[store][idLocal] = gid` — mapeo id local → gid compartido.
+- `updatedAt[store][gid]` = timestamp del último valor conocido localmente (último push/import exitoso). **Ya NO se re-estampa masivamente en cada push**; solo se actualiza para los gids efectivamente subidos o importados.
+- `dirty[store][gid]` = timestamp de la última **MODIFICACIÓN local pendiente** de subir. Clave = gid, valor = `Date.now()` del `put` local. Se limpia tras subirlo con éxito. **Ausente en metas legacy** (ver Migración).
+- `dirtyDel[store][gid]` = timestamp del **BORRADO local pendiente**. El push lo sube como tombstone (`_deleted`) aplicando LWW contra el doc remoto.
+- `lastSyncAt` / `lastPushAt` / `lastPullAt`.
+
+**Tracking**: `main.ts` llama `instalarTrackingSync()` tras `initStorage()`, que registra un hook en `src/storage/index.ts`. El hook corre tras cada `put`/`del` del usuario sobre `getStorage()` y marca `dirty` (put) o `dirtyDel` (del) con `Date.now()` real. Escrituras sin gid conocido (id sin mapear) NO se marcan: el push detecta filas nuevas por ausencia de gid.
+
 ## Flujo de sync
 
-**Push (local → nube)**: `setDoc` upsert por gid en `pos/{syncToken}/{store}/{gid}` con `_updatedAt = Date.now()`. Los registros borrados localmente se envían como **tombstone** (`_deleted: true`); tras enviarlo se limpia el gid del mapa persistido (`gids`/`updatedAt`) para NO re-enviarlo infinitamente. Local-first: **el último push gana** en la nube (sobrescribe la versión anterior).
+**Push (local → nube) = SELECTIVO + LWW** (`pushLocal`):
+- Solo sube: (a) filas locales **sin gid** (nuevas — se les asigna gid en el momento), (b) gids en `dirty` (modificadas), (c) gids en `dirtyDel` (borradas → tombstone `_deleted` con su timestamp).
+- Antes de cada `setDoc` lee `getDoc` del remoto: si `remoto._updatedAt >= stamp` (el remoto es igual o más nuevo) **NO escribe** y limpia la marca `dirty`/`dirtyDel` — el pull lo traerá al local. Local-first PERO el más nuevo gana.
+- `_updatedAt` = timestamp REAL del cambio local (el de `dirty`/`dirtyDel`, o `Date.now()` solo para filas nuevas). **Ya NO es un `Date.now()` global de la store**.
+- Tras subir con éxito se limpia `dirty`/`dirtyDel` y se actualiza `updatedAt[gid] = stamp`.
+- Gids de `porGid` que ya no existen localmente y no tienen marca dirty se re-suben como tombstone (limpieza de restos remotos).
 
-**Pull (nube → local)**: para cada store lee los docs remotos:
-- **gid desconocido** → inserta el registro localmente SIN id (que IndexedDB/localStorage autoincrementen) y registra `gid → idNuevo`.
-- **gid conocido** → solo aplica el doc remoto si viene de OTRO dispositivo (`doc._dev !== deviceId`) y `doc._updatedAt > updatedAtLocal[gid]` (ver Anti-clobber).
-- Las stores con push fallido se **SKIP** en el pull.
+**Pull (nube → local)** (`pullRemote`):
+- Para cada store lee los docs remotos; las stores con push fallido se **SKIP** (`fallidas`).
+- **gid desconocido** → inserta el registro localmente SIN id (que IndexedDB/localStorage autoincrementen), registra `gid → idNuevo` y remapea referencias cruzadas. El write va envuelto en `sinTracking` (el pull no debe marcarse a sí mismo como dirty).
+- **gid conocido** → solo aplica el doc remoto si `doc._dev !== config.deviceId` (viene de OTRO dispositivo) y es más nuevo (`doc._updatedAt > updatedAtLocal[gid]`, fallback a `lastSyncAt` para metas legacy) **Y** `!marcaLocalMasNueva(dirty, dirtyDel, gid, doc._updatedAt)`.
+- **tombstone remoto** (`_deleted`) → borra localmente solo si el remoto es más nuevo y no hay marca local más nueva.
+
+**Concurrencia durante el sync**:
+- `capturarSnapshot(meta)` clona `dirty`/`dirtyDel` al INICIO de `sincronizar()` (justo tras `cargarMeta()`).
+- `fusionarMarcasConcurrentes(meta, snapshot)` se llama en 2 puntos: ANTES del pull (para que el guard anti-clobber no pise una edición concurrente) y ANTES de `guardarMeta` (para no perder la marca al persistir). Fusiona SOLO marcas que el hook escribió DURANTE los awaits de red (gid ausente del snapshot o stamp > snapStamp); las del snapshot ya procesadas por el push NO se re-insertan.
+- El **tracking queda ACTIVO durante todo el sync** (si el usuario edita en un await, el hook lo captura). Solo los 3 writes del pull (tombstone del, import put, update put) van envueltos con `sinTracking(...)` **por-operación**.
+
+**Migración legacy** (`necesitaMigracion`): si `meta.dirty == null` Y `gids` no vacío → full-push UNA vez (misma lógica LWW) para poblar la nube y `updatedAt`; se marca migrado (`meta.dirty = {}; meta.dirtyDel = {}`) SOLO si ninguna store falló (`fallidas.length === 0`). Si falla, reintenta completo el siguiente sync.
 
 ## TRAMPA CRÍTICA — IDs / re-idenciación
 
@@ -68,13 +97,17 @@ Los IDs locales son **numéricos autoincrement POR STORE** → dos dispositivos 
 - **Apps NOMBRADAS por proyecto**: `initializeApp(opts, 'leo-pos-' + projectId)` + `getApps().find(...)` para reutilizar la app existente (evita el error "app already exists" al cambiar de proyecto). Cache por projectId.
 - **Cleanup**: en el catch se hace `deleteApp(app)` y se invalida el cache (`firestoreCache = null`).
 
-## Anti-clobber (M2)
+## Anti-clobber (LWW — M2)
 
-Sin esto, un push parcial fallido + pull posterior sobrescribe un edit local más nuevo con la versión remota vieja (pérdida silenciosa). Protección doble:
+Sin esto, un push parcial fallido + pull posterior sobrescribe un edit local más nuevo con la versión remota vieja (pérdida silenciosa). Protección en capas:
 
-1. `SyncMeta.updatedAt[store][gid]` guarda el timestamp local por gid. En pull, para gids conocidos solo aplica el doc remoto si `doc._updatedAt > updatedAtLocal[gid]` (fallback a `lastSyncAt` solo para metas legacy sin `updatedAt`).
-2. `pushLocal` retorna `fallidas: StoreName[]`; las stores con push fallido se SKIP en el pull (`if (fallidas.includes(store)) continue;`).
-3. Al importar/aplicar un doc remoto se actualiza `updatedAt[store][gid]` con el `_updatedAt` remoto.
+1. **Push**: `getDoc` previo a cada `setDoc` — si `remoto._updatedAt >= stamp` no escribe (el remoto igual o más nuevo gana; el pull lo trae al local).
+2. `SyncMeta.updatedAt[store][gid]` guarda el timestamp local por gid. En pull, para gids conocidos solo aplica el doc remoto si `doc._updatedAt > updatedAtLocal[gid]` (fallback a `lastSyncAt` solo para metas legacy sin `updatedAt`).
+3. `marcaLocalMasNueva(dirty, dirtyDel, gid, stamp)` aplicada en AMBOS branches del pull (tombstone `_deleted` y live-doc): no aplica un doc remoto si hay marca `dirty`/`dirtyDel` local con timestamp > `doc._updatedAt`. El guard `doc._dev !== config.deviceId` se conserva (un doc del propio dispositivo nunca se re-aplica).
+4. `pushLocal` retorna `fallidas: StoreName[]`; las stores con push fallido se SKIP en el pull (`if (fallidas.includes(store)) continue;`).
+5. Al importar/aplicar un doc remoto se actualiza `updatedAt[store][gid]` con el `_updatedAt` remoto y se limpia `dirty`/`dirtyDel` del gid.
+
+**Escenario A/B/A resuelto** (referencia mental): A sube X v1 (10:00) → B edita X v2 y sube (10:30) → A re-sincroniza sin tocar X (11:00) → A YA NO pisa a B: su push hace `getDoc`, ve `_updatedAt` de B más nuevo, no escribe; el pull trae v2 al local. Antes del refactor (full-repush ciego) esto perdía v2 silenciosamente.
 
 ## Contrato para otros módulos
 
@@ -84,11 +117,13 @@ Sin esto, un push parcial fallido + pull posterior sobrescribe un edit local má
   - `guardarConfig(config: SyncConfig): boolean` (catch → false; la UI muestra toast de almacenamiento lleno)
   - `borrarConfig(): void`
   - `inicializarFirebase(config): Promise<Firestore | null>`
+  - `instalarTrackingSync(): void` — registra el hook de dirty-tracking; llamada en `main.ts` tras `initStorage()`.
   - `sincronizar(config): Promise<SyncResult>`
+- **API de storage** (`src/storage/index.ts`): `setSyncTrackingHook(hook: ((store, id, tipo: 'put' | 'del') => void) | null): void` y `sinTracking<T>(fn): Promise<T> | T`. El flag global `setSyncTrackingEnabled` fue **ELIMINADO** — usar `sinTracking` por-operación.
 - **Constantes** (`src/core/constants.ts`): `SYNC_KEY`, `SYNC_META_KEY`, `RULES_TEMPLATE`.
 - **Tipos** (`src/types.ts`):
   - `SyncConfig`: campos firebase opcionales + `syncToken`/`deviceId` obligatorios + `intervalMin`.
-  - `SyncMeta`: `version`, `deviceId`, `gids: Partial<Record<StoreName, Record<number, string>>>`, `updatedAt: Partial<Record<StoreName, Record<string, number>>>`, `lastSyncAt`/`lastPushAt`/`lastPullAt`.
+  - `SyncMeta`: `version: 1`, `deviceId`, `gids`, `updatedAt`, `dirty?`, `dirtyDel?`, `lastSyncAt`/`lastPushAt`/`lastPullAt`.
   - `SyncResult`: `ok`, `subidos`, `importados`, `errores`, `fallidas?: string[]`, `mensaje`.
   - `SyncDoc<T = unknown>`.
 - **Convenciones**: `intervalMin: 0` = auto-sync desactivado; `null/undefined` = default 5 (minutos). Mensajes/errores en español.
@@ -99,12 +134,15 @@ Sin esto, un push parcial fallido + pull posterior sobrescribe un edit local má
 - El `syncToken` es la llave maestra compartida entre dispositivos (segmento del path, se muestra en la UI). NO es un secreto absoluto: quien lo tenga accede a los datos de ese path.
 - Config + token se guardan SOLO en localStorage de cada dispositivo; nunca como campo de documento.
 - `guardarSyncConfig` valida el token pegado con regex `^[A-Za-z0-9_-]{1,128}$` (toast de error y no guarda si no cumple).
+- **LWW es protección SOLO de cliente**: no se toca `RULES_TEMPLATE`; dos dispositivos escribiendo el MISMO path al MISMO tiempo se resuelven en la nube por último `setDoc`, pero el flujo normal evita pisar gracias a `getDoc` previo + `_updatedAt`.
 
 ## Errores comunes / trampas
 
 - **Duplicate-app**: cambiar de proyecto Firebase revienta con "app already exists" hasta recargar si no se usan apps nombradas por proyecto + `getApps().find()` + `deleteApp` en catch.
-- **Clobber con push fallido**: un pull con push parcial fallido sobrescribe datos locales — por eso se guarda `updatedAt` por gid y se SKIP la store que falló.
-- **Tombstones re-enviados**: tras enviar `_deleted` hay que limpiar el gid de `gids`/`updatedAt`; si no, se re-envía cada sesión y la meta crece sin límite.
+- **Clobber con push fallido**: un pull con push parcial fallido sobrescribe datos locales — por eso se guarda `updatedAt` por gid, se SKIP la store que falló y se aplica `marcaLocalMasNueva` en ambos branches del pull.
+- **Tombstones re-enviados**: tras subir un `_deleted` hay que limpiar el gid de `gids`/`updatedAt` y de `dirty`/`dirtyDel`. La fusión con snapshot (`fusionarMarcasConcurrentes`) evita que el hook re-inserte marcas ya procesadas por el push; sin el snapshot, `dirty` nunca se limpia y los tombstones se re-envían infinitamente.
+- **Tracking global desactivado → pérdida silenciosa**: si se desactivara el tracking durante todo el sync (flag global), las ediciones del usuario en los awaits de red se perderían. Resuelto con `sinTracking` **por-operación** (el hook queda activo todo el sync) + snapshot/fusión puntual.
+- **LIMITACIÓN CONOCIDA (no bloqueante)**: ventana de microsegundos si el usuario edita exactamente durante el tramo FINAL del pull (entre la fusión pre-pull y el procesamiento del gid en `pullRemote`). Es inherente al diseño hook→localStorage + fusión puntual; no requiere fix.
 - **`doc.data` sin guard**: los docs remotos pueden tener forma inesperada; validar `if (!doc.data || typeof doc.data !== 'object' || Array.isArray(doc.data)) continue;`.
 - **Token inválido**: el syncToken es segmento de path — validar con la regex antes de guardar (caracteres/espacios inválidos rompen la ruta).
 - **localStorage lleno**: `guardarConfig()` retorna `false` en catch — la UI debe mostrar toast en vez de callar.

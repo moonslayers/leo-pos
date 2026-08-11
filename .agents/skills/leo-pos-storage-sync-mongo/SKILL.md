@@ -22,7 +22,7 @@ src/storage/
 ├── storage.ts        # Interfaz Storage + tipos (Backend, Put)
 ├── indexed-db.ts     # Backend IndexedDB (esquema leonides_pos v1)
 ├── local-storage.ts  # Fallback localStorage (key leonides_pos_data_v1) + setOnStorageFull
-└── index.ts          # Factory initStorage() + singleton getStorage() con auto-fallback
+└── index.ts          # Factory initStorage() + singleton getStorage() con auto-fallback + hook de tracking (setSyncTrackingHook / sinTracking)
 ```
 
 ## Contrato de la interfaz `Storage`
@@ -36,7 +36,7 @@ src/storage/
 - `findByCode(codigo): Promise<Producto | undefined>`
 - `getBackend(): 'indexeddb' | 'localstorage'`
 
-**Todos** los accesos a datos de la app pasan por `getStorage()` (singleton en `src/storage/index.ts`). Esa es la costura donde un wrapper de sync puede interceptar SIN tocar services ni ui.
+**Todos** los accesos a datos de la app pasan por `getStorage()` (singleton en `src/storage/index.ts`). Esa es la costura donde un wrapper de sync puede interceptar SIN tocar services ni ui. **NOTA**: la costura de tracking YA está implementada — `src/storage/index.ts` expone `setSyncTrackingHook(hook)` y `sinTracking(fn)` (decorator `conTracking` sobre el backend real, contador `trackingDepth`); `src/services/sync.ts` los consume para marcar `dirty`/`dirtyDel` en `SyncMeta` (ver skill `leo-pos-sync-firebase`).
 
 ## Esquema IndexedDB (NO cambiar — datos reales dependen de esto)
 
@@ -68,6 +68,7 @@ Los IDs son **numéricos autoincrement por store** → dos dispositivos generan 
 - Otro dispositivo con la misma key detecta que ya existe una base y **descarga/importa** los datos. (Equivalente al pull de Firebase.)
 - Implementar como **wrapper/decorator** sobre la interfaz `Storage` (patrón decorator) — SIN modificar `services/*` ni `src/ui/*`. (Descartado: el motor Firebase vive en `src/services/sync.ts` y consulta `Storage` directamente.)
 - El export/import de respaldo JSON manual ya existe en Ajustes (`src/services/backup.ts`) para copia manual entre dispositivos. (Sigue vigente.)
+- **La costura de tracking YA está implementada** (no es solo propuesta): `src/storage/index.ts` expone `setSyncTrackingHook` y `sinTracking` (decorator `conTracking`, contador de profundidad `trackingDepth`) y `src/services/sync.ts` los consume para marcar `dirty`/`dirtyDel` en `SyncMeta` y suprimir el tracking en los writes del pull. El patrón decorator sobre `Storage` pasó de ser "costura futura" a la base del dirty-tracking real del sync Firebase.
 
 ## Errores comunes / trampas
 
