@@ -10,6 +10,7 @@ import { initFiados } from './ui/fiados';
 import { initDashboard } from './ui/dashboard';
 import { initAjustes } from './ui/ajustes';
 import { initSync } from './ui/sync';
+import { instalarTrackingSync } from './services/sync';
 import {
   agregarCarrito,
   cambiarQty,
@@ -46,6 +47,7 @@ async function agregarCarritoGlobal(id: number): Promise<void> {
     toast('⚠️ IndexedDB no disponible aquí; los datos se guardarán en localStorage', 3800);
   }
   setOnStorageFull(() => toast('⚠️ No se pudo guardar: almacenamiento lleno'));
+  instalarTrackingSync();
 
   const f = new Date().toLocaleDateString('es-MX', { weekday: 'long', day: 'numeric', month: 'long' });
   $('hdrFecha').textContent = f.charAt(0).toUpperCase() + f.slice(1);

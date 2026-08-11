@@ -109,7 +109,23 @@ export interface SyncMeta {
   version: 1;
   deviceId: string;
   gids: Partial<Record<StoreName, Record<number, string>>>;
+  /**
+   * updatedAt[store][gid] = timestamp (ms) del último valor conocido localmente
+   * (último push/import exitoso). Ya NO se re-estampa para todos los registros en
+   * cada push; solo se actualiza para los gids efectivamente subidos o importados.
+   */
   updatedAt?: Partial<Record<StoreName, Record<string, number>>>;
+  /**
+   * dirty[store][gid] = timestamp (ms) de la última MODIFICACIÓN local pendiente
+   * de subir. Clave = gid, valor = Date.now() del put local. Se limpia tras
+   * subirlo con éxito. Ausente en metas legacy (ver migración en sync.ts).
+   */
+  dirty?: Partial<Record<StoreName, Record<string, number>>>;
+  /**
+   * dirtyDel[store][gid] = timestamp (ms) del BORRADO local pendiente. El push lo
+   * sube como tombstone (_deleted) aplicando LWW contra el doc remoto.
+   */
+  dirtyDel?: Partial<Record<StoreName, Record<string, number>>>;
   lastSyncAt?: number;
   lastPushAt?: number;
   lastPullAt?: number;

@@ -2,7 +2,7 @@ import type { FirebaseApp } from 'firebase/app';
 import type { Firestore } from 'firebase/firestore';
 import type { StoreName, SyncConfig, SyncDoc, SyncMeta, SyncResult } from '../types';
 import { SYNC_KEY, SYNC_META_KEY } from '../core/constants';
-import { getStorage } from '../storage';
+import { getStorage, setSyncTrackingHook, sinTracking } from '../storage';
 
 const ORDEN: StoreName[] = ['productos', 'clientes', 'ventas', 'abonos'];
 
@@ -94,6 +94,8 @@ function cargarMeta(): SyncMeta {
       deviceId: typeof parsed.deviceId === 'string' ? parsed.deviceId : '',
       gids: parsed.gids && typeof parsed.gids === 'object' ? parsed.gids : {},
       updatedAt: parsed.updatedAt && typeof parsed.updatedAt === 'object' ? parsed.updatedAt : {},
+      dirty: parsed.dirty && typeof parsed.dirty === 'object' ? parsed.dirty : undefined,
+      dirtyDel: parsed.dirtyDel && typeof parsed.dirtyDel === 'object' ? parsed.dirtyDel : undefined,
       lastSyncAt: parsed.lastSyncAt,
       lastPushAt: parsed.lastPushAt,
       lastPullAt: parsed.lastPullAt
@@ -122,6 +124,25 @@ function updatedAtDe(meta: SyncMeta, store: StoreName): Record<string, number> {
   return meta.updatedAt[store]!;
 }
 
+function dirtyDe(meta: SyncMeta, store: StoreName): Record<string, number> {
+  if (!meta.dirty) meta.dirty = {};
+  if (!meta.dirty[store]) meta.dirty[store] = {};
+  return meta.dirty[store]!;
+}
+
+function dirtyDelDe(meta: SyncMeta, store: StoreName): Record<string, number> {
+  if (!meta.dirtyDel) meta.dirtyDel = {};
+  if (!meta.dirtyDel[store]) meta.dirtyDel[store] = {};
+  return meta.dirtyDel[store]!;
+}
+
+function idLocalDe(porGid: Record<number, string>, gid: string): number {
+  for (const [idStr, g] of Object.entries(porGid)) {
+    if (g === gid) return Number(idStr);
+  }
+  return 0;
+}
+
 function gidDe(meta: SyncMeta, store: StoreName, id: number): string {
   const m = gidsDe(meta, store);
   if (!m[id]) m[id] = uuid();
@@ -140,10 +161,27 @@ function sinIndefinidos(value: unknown): unknown {
   return value;
 }
 
+interface ItemPush {
+  gid: string;
+  idLocal: number;
+  stamp: number;
+  deleted: boolean;
+  data: Record<string, unknown>;
+}
+
+/**
+ * Push selectivo + LWW (last-write-wins):
+ * - Solo sube lo que cambió localmente (filas nuevas sin gid, `dirty` y `dirtyDel`).
+ * - Antes de cada `setDoc` lee el doc remoto y NO pisa si el remoto es igual o más
+ *   nuevo (`remoto._updatedAt >= stamp`); el pull lo traerá al local.
+ * - En modo `legacy` (meta antigua sin `dirty`/`dirtyDel`) hace un full-push UNA vez
+ *   para poblar la nube y `updatedAt`; después queda incremental.
+ */
 async function pushLocal(
   db: Firestore,
   config: SyncConfig,
-  meta: SyncMeta
+  meta: SyncMeta,
+  legacy: boolean
 ): Promise<{ n: number; errores: number; fallidas: StoreName[] }> {
   const f = await import('firebase/firestore');
   let n = 0;
@@ -152,35 +190,112 @@ async function pushLocal(
   for (const store of ORDEN) {
     try {
       const filas = await getStorage().getAll<Record<string, unknown>>(store);
-      const now = Date.now();
       const porGid = gidsDe(meta, store);
       const ups = updatedAtDe(meta, store);
+      const dirty: Record<string, number> = legacy ? {} : dirtyDe(meta, store);
+      const dirtyDel: Record<string, number> = legacy ? {} : dirtyDelDe(meta, store);
+      const idAFila = new Map<number, Record<string, unknown>>();
+      const gidAId = new Map<string, number>();
       const gidsActivos = new Set<string>();
       for (const fila of filas) {
         if (typeof fila.id !== 'number') continue;
-        const gid = gidDe(meta, store, fila.id);
-        gidsActivos.add(gid);
-        await f.setDoc(f.doc(db, 'pos', config.syncToken, store, gid), {
-          data: sinIndefinidos(fila),
-          _gid: gid,
-          _dev: config.deviceId,
-          _updatedAt: now
-        });
-        ups[gid] = now;
-        n++;
+        idAFila.set(fila.id, fila);
+        const gid = porGid[fila.id];
+        if (gid != null) {
+          gidsActivos.add(gid);
+          gidAId.set(gid, fila.id);
+        }
       }
-      for (const [idStr, gid] of Object.entries(porGid)) {
-        if (gidsActivos.has(gid)) continue;
-        await f.setDoc(f.doc(db, 'pos', config.syncToken, store, gid), {
-          data: { id: Number(idStr) },
-          _gid: gid,
-          _dev: config.deviceId,
-          _updatedAt: now,
-          _deleted: true
-        });
-        delete porGid[Number(idStr)];
-        delete ups[gid];
-        n++;
+      const items: ItemPush[] = [];
+      if (legacy) {
+        for (const fila of filas) {
+          if (typeof fila.id !== 'number') continue;
+          const gid = gidDe(meta, store, fila.id);
+          items.push({ gid, idLocal: fila.id, stamp: Date.now(), deleted: false, data: fila });
+        }
+        for (const [idStr, gid] of Object.entries(porGid)) {
+          if (gidsActivos.has(gid)) continue;
+          const idLocal = Number(idStr);
+          items.push({ gid, idLocal, stamp: Date.now(), deleted: true, data: { id: idLocal } });
+        }
+      } else {
+        for (const fila of filas) {
+          if (typeof fila.id !== 'number') continue;
+          const gid = porGid[fila.id];
+          if (gid != null) continue;
+          const nuevoGid = gidDe(meta, store, fila.id);
+          items.push({ gid: nuevoGid, idLocal: fila.id, stamp: Date.now(), deleted: false, data: fila });
+        }
+        for (const [gid, stamp] of Object.entries(dirty)) {
+          const idLocal = gidAId.get(gid);
+          if (idLocal == null) {
+            if (!(gid in dirtyDel)) {
+              const idHuérfano = idLocalDe(porGid, gid);
+              items.push({ gid, idLocal: idHuérfano, stamp, deleted: true, data: { id: idHuérfano } });
+            }
+            continue;
+          }
+          items.push({ gid, idLocal, stamp, deleted: false, data: idAFila.get(idLocal)! });
+        }
+        for (const [gid, stamp] of Object.entries(dirtyDel)) {
+          if (gidAId.has(gid)) {
+            delete dirtyDel[gid];
+            continue;
+          }
+          const idLocal = idLocalDe(porGid, gid);
+          items.push({ gid, idLocal, stamp, deleted: true, data: { id: idLocal } });
+        }
+        for (const [idStr, gid] of Object.entries(porGid)) {
+          if (gidsActivos.has(gid)) continue;
+          if (gid in dirtyDel || gid in dirty) continue;
+          const idLocal = Number(idStr);
+          items.push({ gid, idLocal, stamp: Date.now(), deleted: true, data: { id: idLocal } });
+        }
+      }
+      for (const item of items) {
+        const ref = f.doc(db, 'pos', config.syncToken, store, item.gid);
+        const snap = await f.getDoc(ref);
+        const remoto = snap.exists() ? (snap.data() as SyncDoc<Record<string, unknown>>) : null;
+        const remotoU = remoto && typeof remoto._updatedAt === 'number' ? remoto._updatedAt : null;
+        if (remotoU != null && remotoU >= item.stamp) {
+          if (item.deleted) {
+            delete dirtyDel[item.gid];
+            delete dirty[item.gid];
+            if (remoto!._deleted) {
+              if (item.idLocal) delete porGid[item.idLocal];
+              delete ups[item.gid];
+            }
+          } else {
+            delete dirty[item.gid];
+            delete dirtyDel[item.gid];
+          }
+          continue;
+        }
+        if (item.deleted) {
+          await f.setDoc(ref, {
+            data: item.data,
+            _gid: item.gid,
+            _dev: config.deviceId,
+            _updatedAt: item.stamp,
+            _deleted: true
+          });
+          delete dirtyDel[item.gid];
+          delete dirty[item.gid];
+          if (item.idLocal) delete porGid[item.idLocal];
+          delete ups[item.gid];
+          n++;
+        } else {
+          await f.setDoc(ref, {
+            data: sinIndefinidos(item.data),
+            _gid: item.gid,
+            _dev: config.deviceId,
+            _updatedAt: item.stamp
+          });
+          delete dirty[item.gid];
+          delete dirtyDel[item.gid];
+          ups[item.gid] = item.stamp;
+          n++;
+        }
       }
     } catch (e) {
       errores++;
@@ -222,6 +337,22 @@ function remapearReferencias(
   return data;
 }
 
+/**
+ * Guard anti-clobber del pull: true si hay una marca local (modificación en
+ * `dirty` o borrado en `dirtyDel`) MÁS NUEVA que el doc remoto. En ese caso NO
+ * se aplica el doc remoto: la edición/borrado local gana (LWW).
+ */
+function marcaLocalMasNueva(
+  dirty: Record<string, number> | undefined,
+  dirtyDel: Record<string, number> | undefined,
+  gid: string,
+  stamp: number
+): boolean {
+  const d = dirty ? dirty[gid] : undefined;
+  const dd = dirtyDel ? dirtyDel[gid] : undefined;
+  return (d != null && d > stamp) || (dd != null && dd > stamp);
+}
+
 async function pullRemote(
   db: Firestore,
   config: SyncConfig,
@@ -238,6 +369,8 @@ async function pullRemote(
     try {
       const porGid = gidsDe(meta, store);
       const ups = updatedAtDe(meta, store);
+      const dirty = meta.dirty && meta.dirty[store] ? meta.dirty[store]! : {};
+      const dirtyDel = meta.dirtyDel && meta.dirtyDel[store] ? meta.dirtyDel[store]! : {};
       const gidAId = new Map<string, number>();
       for (const [idStr, gid] of Object.entries(porGid)) gidAId.set(gid, Number(idStr));
       const remap = new Map<number, number>();
@@ -251,17 +384,25 @@ async function pullRemote(
         const idOrigen = typeof doc.data.id === 'number' ? doc.data.id : undefined;
         if (doc._deleted) {
           if (idLocal != null) {
-            await getStorage().del(store, idLocal);
-            delete porGid[idLocal];
-            delete ups[gid];
-            n++;
+            const localU = ups[gid];
+            const masNuevo = localU == null
+              ? doc._updatedAt > (meta.lastSyncAt || 0)
+              : doc._updatedAt > localU;
+            if (masNuevo && !marcaLocalMasNueva(dirty, dirtyDel, gid, doc._updatedAt)) {
+              await sinTracking(() => getStorage().del(store, idLocal));
+              delete porGid[idLocal];
+              delete ups[gid];
+              delete dirty[gid];
+              delete dirtyDel[gid];
+              n++;
+            }
           }
           continue;
         }
         if (idLocal == null) {
           const { id: _idOrigen, ...limpiado } = doc.data;
           const data = remapearReferencias(store, limpiado, refMap);
-          const idNuevo = await getStorage().put(store, data);
+          const idNuevo = await sinTracking(() => getStorage().put(store, data));
           porGid[idNuevo] = gid;
           ups[gid] = typeof doc._updatedAt === 'number' ? doc._updatedAt : Date.now();
           if (idOrigen != null) remap.set(idOrigen, idNuevo);
@@ -272,11 +413,13 @@ async function pullRemote(
           const masNuevo = localU == null
             ? doc._updatedAt > (meta.lastSyncAt || 0)
             : doc._updatedAt > localU;
-          if (doc._dev !== config.deviceId && masNuevo) {
+          if (doc._dev !== config.deviceId && masNuevo && !marcaLocalMasNueva(dirty, dirtyDel, gid, doc._updatedAt)) {
             const { id: _idOrigen, ...limpiado } = doc.data;
             const data = remapearReferencias(store, limpiado, refMap);
-            await getStorage().put(store, { ...data, id: idLocal });
+            await sinTracking(() => getStorage().put(store, { ...data, id: idLocal }));
             ups[gid] = doc._updatedAt;
+            delete dirty[gid];
+            delete dirtyDel[gid];
             n++;
           }
         }
@@ -288,6 +431,94 @@ async function pullRemote(
     }
   }
   return { n, errores, fallidas: fallidasPull };
+}
+
+export function instalarTrackingSync(): void {
+  setSyncTrackingHook((store, id, tipo) => {
+    const config = cargarConfig();
+    if (!config || !config.syncToken) return;
+    const meta = cargarMeta();
+    if (!meta.dirty || !meta.dirtyDel) return;
+    const porGid = meta.gids[store];
+    if (!porGid) return;
+    const gid = porGid[id];
+    if (!gid) return;
+    const dirty = dirtyDe(meta, store);
+    const dirtyDel = dirtyDelDe(meta, store);
+    if (tipo === 'del') {
+      dirtyDel[gid] = Date.now();
+      delete dirty[gid];
+    } else {
+      dirty[gid] = Date.now();
+    }
+    guardarMeta(meta);
+  });
+}
+
+/**
+ * Migración legacy: las metas creadas por la versión anterior no tienen
+ * `dirty`/`dirtyDel`. Se detecta en la primera ejecución tras este cambio
+ * (dirty ausente PERO gids ya poblados) y se hace un full-push UNA vez para
+ * poblar la nube y `updatedAt`. Al completarse todas las stores, se inicializa
+ * `dirty`/`dirtyDel` y el sync queda incremental.
+ */
+function necesitaMigracion(meta: SyncMeta): boolean {
+  return meta.dirty == null && Object.keys(meta.gids).length > 0;
+}
+
+type MarcasSnapshot = {
+  dirty: Partial<Record<StoreName, Record<string, number>>>;
+  dirtyDel: Partial<Record<StoreName, Record<string, number>>>;
+};
+
+/**
+ * Snapshot (clon) de las marcas dirty/dirtyDel al INICIO del sync, justo tras
+ * `cargarMeta()`. La fusión compara contra este snapshot para distinguir las
+ * marcas ya procesadas por el push de las que el hook añadió DURANTE el sync
+ * (ediciones concurrentes del usuario en los awaits de red).
+ */
+function capturarSnapshot(meta: SyncMeta): MarcasSnapshot {
+  const snapshot: MarcasSnapshot = { dirty: {}, dirtyDel: {} };
+  for (const store of ORDEN) {
+    if (meta.dirty && meta.dirty[store]) snapshot.dirty[store] = { ...meta.dirty[store] };
+    if (meta.dirtyDel && meta.dirtyDel[store]) snapshot.dirtyDel[store] = { ...meta.dirtyDel[store] };
+  }
+  return snapshot;
+}
+
+/**
+ * Fusiona en la meta en memoria SOLO las marcas dirty/dirtyDel que el hook añadió
+ * DESPUÉS del snapshot (ediciones concurrentes durante los awaits de red). Las
+ * marcas que estaban en el snapshot ya fueron procesadas por el push y NO se
+ * restauran (evita reprocesamiento infinito). Se llama:
+ * 1) ANTES del pull, para que el guard anti-clobber no sobrescriba una edición
+ *    concurrente con un doc remoto.
+ * 2) ANTES de `guardarMeta`, para no pisar esas marcas al persistir la meta.
+ * Solo se fusionan marcas; `updatedAt`/`gids` de la meta en memoria ganan.
+ */
+function fusionarMarcasConcurrentes(meta: SyncMeta, snapshot: MarcasSnapshot): void {
+  const fresca = cargarMeta();
+  for (const store of ORDEN) {
+    fusionarTipoDeMarca(meta.dirty, snapshot.dirty, fresca.dirty, store);
+    fusionarTipoDeMarca(meta.dirtyDel, snapshot.dirtyDel, fresca.dirtyDel, store);
+  }
+}
+
+function fusionarTipoDeMarca(
+  metaMap: Partial<Record<StoreName, Record<string, number>>> | undefined,
+  snapshotMap: Partial<Record<StoreName, Record<string, number>>>,
+  frescaMap: Partial<Record<StoreName, Record<string, number>>> | undefined,
+  store: StoreName
+): void {
+  if (!metaMap || !frescaMap || !frescaMap[store]) return;
+  const snapStore = snapshotMap[store];
+  const objetivo = metaMap[store] ?? {};
+  for (const [gid, stamp] of Object.entries(frescaMap[store]!)) {
+    const snapStamp = snapStore ? snapStore[gid] : undefined;
+    const esNueva = snapStamp === undefined || stamp > snapStamp;
+    if (esNueva && (!(gid in objetivo) || objetivo[gid] < stamp)) objetivo[gid] = stamp;
+  }
+  metaMap[store] = objetivo;
 }
 
 export async function sincronizar(config: SyncConfig): Promise<SyncResult> {
@@ -312,15 +543,27 @@ export async function sincronizar(config: SyncConfig): Promise<SyncResult> {
   }
   const meta = cargarMeta();
   if (config.deviceId) meta.deviceId = config.deviceId;
+  const legacy = necesitaMigracion(meta);
+  const snapshot = capturarSnapshot(meta);
   let subidos = 0;
   let importados = 0;
   let errores = 0;
   let fallidas: string[] = [];
   try {
-    const push = await pushLocal(db, config, meta);
+    // El tracking queda ACTIVO durante todo el sync: si el usuario edita algo en
+    // los awaits de red, el hook marca dirty en localStorage. Solo los writes del
+    // pull se suprimen por-operación con `sinTracking`. Se fusionan las marcas
+    // concurrentes ANTES del pull (para no sobrescribir una edición) y ANTES de
+    // persistir (para no pisar la marca).
+    const push = await pushLocal(db, config, meta, legacy);
     meta.lastPushAt = Date.now();
     subidos = push.n;
     errores += push.errores;
+    if (legacy && push.fallidas.length === 0) {
+      meta.dirty = {};
+      meta.dirtyDel = {};
+    }
+    fusionarMarcasConcurrentes(meta, snapshot);
     // TODO(n3): el push secuencial por store puede optimizarse con Promise.all por store si hace falta
     const pull = await pullRemote(db, config, meta, push.fallidas);
     meta.lastPullAt = Date.now();
@@ -328,6 +571,7 @@ export async function sincronizar(config: SyncConfig): Promise<SyncResult> {
     errores += pull.errores;
     fallidas = push.fallidas.concat(pull.fallidas);
     meta.lastSyncAt = Date.now();
+    fusionarMarcasConcurrentes(meta, snapshot);
     guardarMeta(meta);
     if (errores > 0) {
       const detalle = fallidas.length ? ` Falló: ${fallidas.join(', ')}.` : '';
