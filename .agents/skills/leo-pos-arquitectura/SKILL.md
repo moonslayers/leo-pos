@@ -45,7 +45,11 @@ src/
     ├── cart.ts            # renderCarrito + registerCartOps
     ├── ventas.ts          # Vista ventas (cobrar, scanner de venta)
     ├── productos.ts       # Vista productos (CRUD, scanner de producto)
-    ├── fiados.ts          # Vista fiados (abonos, detalle cliente)
+    ├── fiados.ts          # Vista fiados (abonos, detalle cliente, deuda previa)
+    │   #   Lógica de clientes/deudas (crearCliente, guardarAbono, calcularDeudas,
+    │   #   detalleCliente, registrarDeudaPrevia) vive en src/services/clients.ts;
+    │   #   Venta puede llevar previa?: boolean (deuda previa del cuaderno, items vacíos).
+    │   #   Ver skill leo-pos-fiados-deudas
     ├── dashboard.ts       # Vista dashboard (estadísticas)
     ├── ajustes.ts         # Vista ajustes (backup, tours, import/export)
     └── sync.ts            # Card #cardSync en Ajustes (sync Firebase, window globals + timer)
