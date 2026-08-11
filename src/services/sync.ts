@@ -181,13 +181,14 @@ async function pushLocal(
   db: Firestore,
   config: SyncConfig,
   meta: SyncMeta,
-  legacy: boolean
+  legacy: boolean,
+  stores: StoreName[]
 ): Promise<{ n: number; errores: number; fallidas: StoreName[] }> {
   const f = await import('firebase/firestore');
   let n = 0;
   let errores = 0;
   const fallidas: StoreName[] = [];
-  for (const store of ORDEN) {
+  for (const store of stores) {
     try {
       const filas = await getStorage().getAll<Record<string, unknown>>(store);
       const porGid = gidsDe(meta, store);
@@ -357,14 +358,15 @@ async function pullRemote(
   db: Firestore,
   config: SyncConfig,
   meta: SyncMeta,
-  fallidas: StoreName[]
+  fallidas: StoreName[],
+  stores: StoreName[]
 ): Promise<{ n: number; errores: number; fallidas: StoreName[] }> {
   const f = await import('firebase/firestore');
   let n = 0;
   let errores = 0;
   const fallidasPull: StoreName[] = [];
   const refMap: RefMap = {};
-  for (const store of ORDEN) {
+  for (const store of stores) {
     if (fallidas.includes(store)) continue;
     try {
       const porGid = gidsDe(meta, store);
@@ -433,10 +435,54 @@ async function pullRemote(
   return { n, errores, fallidas: fallidasPull };
 }
 
+/**
+ * Guard de concurrencia a nivel motor: true mientras un `sincronizar` está en
+ * curso. Si se invoca otro sync (timer, manual o sync-on-write) se retorna de
+ * inmediato un resultado con `omitirToast` para que la UI no toastee.
+ */
+let syncEnCurso = false;
+
+/** Debounce TRAILING del sync por evento: cada escritura resetea el timer, así
+ *  una operación que escribe varias stores (ej. venta → ventas + productos por
+ *  stock) coalesce en UNA llamada a `sincronizar`. */
+const DEBOUNCE_SYNC_EVENTO_MS = 1500;
+
+const storesPendientesSync = new Set<StoreName>();
+let timerSyncEvento: ReturnType<typeof globalThis.setTimeout> | null = null;
+
+function programarSyncPorEvento(store: StoreName): void {
+  storesPendientesSync.add(store);
+  if (timerSyncEvento !== null) globalThis.clearTimeout(timerSyncEvento);
+  timerSyncEvento = globalThis.setTimeout(() => {
+    timerSyncEvento = null;
+    void ejecutarSyncPorEvento();
+  }, DEBOUNCE_SYNC_EVENTO_MS);
+}
+
+async function ejecutarSyncPorEvento(): Promise<void> {
+  if (storesPendientesSync.size === 0) return;
+  const pendientes = [...storesPendientesSync];
+  storesPendientesSync.clear();
+  const config = cargarConfig();
+  if (!config || !config.syncToken) return;
+  if (syncEnCurso) return;
+  const meta = cargarMeta();
+  try {
+    if (necesitaMigracion(meta)) {
+      await sincronizar(config);
+    } else {
+      await sincronizar(config, { soloStores: pendientes });
+    }
+  } catch (e) {
+    console.error('Error en la sincronización automática por evento:', e);
+  }
+}
+
 export function instalarTrackingSync(): void {
   setSyncTrackingHook((store, id, tipo) => {
     const config = cargarConfig();
     if (!config || !config.syncToken) return;
+    programarSyncPorEvento(store);
     const meta = cargarMeta();
     if (!meta.dirty || !meta.dirtyDel) return;
     const porGid = meta.gids[store];
@@ -521,87 +567,137 @@ function fusionarTipoDeMarca(
   metaMap[store] = objetivo;
 }
 
-export async function sincronizar(config: SyncConfig): Promise<SyncResult> {
-  if (!config || !config.syncToken) {
+export interface OpcionesSincronizar {
+  /** Subconjunto de stores a sincronizar. Si se omite o está vacío, se
+   *  sincronizan las 4 stores en el orden canónico `ORDEN`. El PUSH usa el
+   *  subset tal cual; el PULL lo amplía con las stores de referencia que
+   *  ventas/abonos referencian (ver `ampliarPullSubset`). */
+  soloStores?: StoreName[];
+}
+
+/**
+ * Amplía el subset del PULL con las stores de referencia necesarias para
+ * remapear referencias cruzadas (`ventas.clienteId`, `abonos.clienteId`,
+ * `ventas.items[].productoId`):
+ * - Si el subset incluye `ventas` → el pull incluye además `clientes` y `productos`.
+ * - Si el subset incluye `abonos` → el pull incluye además `clientes`.
+ * - Sin `ventas`/`abonos` → el pull usa el subset tal cual.
+ * El PUSH NO se amplía: solo sube las stores afectadas por el evento.
+ * Preserva el orden canónico `ORDEN` (las referencias se procesan antes que
+ * sus referentes). En full-sync (subset = `ORDEN`) es un no-op.
+ */
+function ampliarPullSubset(stores: StoreName[]): StoreName[] {
+  const conjunto = new Set<StoreName>(stores);
+  if (conjunto.has('ventas')) {
+    conjunto.add('clientes');
+    conjunto.add('productos');
+  }
+  if (conjunto.has('abonos')) conjunto.add('clientes');
+  return ORDEN.filter((s) => conjunto.has(s));
+}
+
+export async function sincronizar(
+  config: SyncConfig,
+  opciones?: OpcionesSincronizar
+): Promise<SyncResult> {
+  if (syncEnCurso) {
     return {
       ok: false,
       subidos: 0,
       importados: 0,
       errores: 0,
-      mensaje: 'Falta la configuración de sincronización. Actívala en Ajustes.'
+      omitirToast: true,
+      mensaje: 'Ya hay una sincronización en curso.'
     };
   }
-  const db = await inicializarFirebase(config);
-  if (!db) {
-    return {
-      ok: false,
-      subidos: 0,
-      importados: 0,
-      errores: 0,
-      mensaje: 'No se pudo conectar con Firebase. Revisa la configuración.'
-    };
-  }
-  const meta = cargarMeta();
-  if (config.deviceId) meta.deviceId = config.deviceId;
-  const legacy = necesitaMigracion(meta);
-  const snapshot = capturarSnapshot(meta);
-  let subidos = 0;
-  let importados = 0;
-  let errores = 0;
-  let fallidas: string[] = [];
+  syncEnCurso = true;
   try {
-    // El tracking queda ACTIVO durante todo el sync: si el usuario edita algo en
-    // los awaits de red, el hook marca dirty en localStorage. Solo los writes del
-    // pull se suprimen por-operación con `sinTracking`. Se fusionan las marcas
-    // concurrentes ANTES del pull (para no sobrescribir una edición) y ANTES de
-    // persistir (para no pisar la marca).
-    const push = await pushLocal(db, config, meta, legacy);
-    meta.lastPushAt = Date.now();
-    subidos = push.n;
-    errores += push.errores;
-    if (legacy && push.fallidas.length === 0) {
-      meta.dirty = {};
-      meta.dirtyDel = {};
+    if (!config || !config.syncToken) {
+      return {
+        ok: false,
+        subidos: 0,
+        importados: 0,
+        errores: 0,
+        mensaje: 'Falta la configuración de sincronización. Actívala en Ajustes.'
+      };
     }
-    fusionarMarcasConcurrentes(meta, snapshot);
-    // TODO(n3): el push secuencial por store puede optimizarse con Promise.all por store si hace falta
-    const pull = await pullRemote(db, config, meta, push.fallidas);
-    meta.lastPullAt = Date.now();
-    importados = pull.n;
-    errores += pull.errores;
-    fallidas = push.fallidas.concat(pull.fallidas);
-    meta.lastSyncAt = Date.now();
-    fusionarMarcasConcurrentes(meta, snapshot);
-    guardarMeta(meta);
-    if (errores > 0) {
-      const detalle = fallidas.length ? ` Falló: ${fallidas.join(', ')}.` : '';
+    const db = await inicializarFirebase(config);
+    if (!db) {
+      return {
+        ok: false,
+        subidos: 0,
+        importados: 0,
+        errores: 0,
+        mensaje: 'No se pudo conectar con Firebase. Revisa la configuración.'
+      };
+    }
+    const solo = opciones?.soloStores;
+    const stores = solo && solo.length > 0 ? ORDEN.filter((s) => solo.includes(s)) : ORDEN;
+    const storesPull = ampliarPullSubset(stores);
+    const meta = cargarMeta();
+    if (config.deviceId) meta.deviceId = config.deviceId;
+    const legacy = necesitaMigracion(meta);
+    const snapshot = capturarSnapshot(meta);
+    let subidos = 0;
+    let importados = 0;
+    let errores = 0;
+    let fallidas: string[] = [];
+    try {
+      // El tracking queda ACTIVO durante todo el sync: si el usuario edita algo en
+      // los awaits de red, el hook marca dirty en localStorage. Solo los writes del
+      // pull se suprimen por-operación con `sinTracking`. Se fusionan las marcas
+      // concurrentes ANTES del pull (para no sobrescribir una edición) y ANTES de
+      // persistir (para no pisar la marca).
+      const push = await pushLocal(db, config, meta, legacy, stores);
+      meta.lastPushAt = Date.now();
+      subidos = push.n;
+      errores += push.errores;
+      if (legacy && push.fallidas.length === 0) {
+        meta.dirty = {};
+        meta.dirtyDel = {};
+      }
+      fusionarMarcasConcurrentes(meta, snapshot);
+      // TODO(n3): el push secuencial por store puede optimizarse con Promise.all por store si hace falta
+      const pull = await pullRemote(db, config, meta, push.fallidas, storesPull);
+      meta.lastPullAt = Date.now();
+      importados = pull.n;
+      errores += pull.errores;
+      fallidas = push.fallidas.concat(pull.fallidas);
+      meta.lastSyncAt = Date.now();
+      fusionarMarcasConcurrentes(meta, snapshot);
+      guardarMeta(meta);
+      if (errores > 0) {
+        const detalle = fallidas.length ? ` Falló: ${fallidas.join(', ')}.` : '';
+        return {
+          ok: true,
+          subidos,
+          importados,
+          errores,
+          fallidas,
+          mensaje: `Sincronización con errores parciales: ${subidos} subidos, ${importados} importados, ${errores} errores.${detalle}`
+        };
+      }
       return {
         ok: true,
         subidos,
         importados,
         errores,
+        mensaje: `Sincronización completada: ${subidos} subidos, ${importados} importados.`
+      };
+    } catch (e) {
+      guardarMeta(meta);
+      console.error('Error en la sincronización:', e);
+      const detalle = e instanceof Error ? e.message : String(e);
+      return {
+        ok: false,
+        subidos,
+        importados,
+        errores,
         fallidas,
-        mensaje: `Sincronización con errores parciales: ${subidos} subidos, ${importados} importados, ${errores} errores.${detalle}`
+        mensaje: `Error durante la sincronización: ${detalle}`
       };
     }
-    return {
-      ok: true,
-      subidos,
-      importados,
-      errores,
-      mensaje: `Sincronización completada: ${subidos} subidos, ${importados} importados.`
-    };
-  } catch (e) {
-    guardarMeta(meta);
-    console.error('Error en la sincronización:', e);
-    const detalle = e instanceof Error ? e.message : String(e);
-    return {
-      ok: false,
-      subidos,
-      importados,
-      errores,
-      fallidas,
-      mensaje: `Error durante la sincronización: ${detalle}`
-    };
+  } finally {
+    syncEnCurso = false;
   }
 }

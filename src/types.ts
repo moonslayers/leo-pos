@@ -146,4 +146,9 @@ export interface SyncResult {
   errores: number;
   fallidas?: string[];
   mensaje: string;
+  /**
+   * true cuando la UI no debe mostrar este resultado como toast (p. ej. el
+   * early-return de "ya hay una sincronización en curso" del motor).
+   */
+  omitirToast?: boolean;
 }

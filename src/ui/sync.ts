@@ -61,7 +61,7 @@ async function ejecutarSync(toastSiempre: boolean): Promise<void> {
   try {
     const res = await sincronizar(config);
     renderSync();
-    if (toastSiempre || !res.ok || res.errores > 0) toast(res.mensaje, 4000);
+    if (!res.omitirToast && (toastSiempre || !res.ok || res.errores > 0)) toast(res.mensaje, 4000);
   } finally {
     sincronizando = false;
   }
@@ -90,7 +90,7 @@ function vistaConfigurada(config: SyncConfig): string {
     : 'Aún no se ha sincronizado';
   const min = config.intervalMin == null ? 5 : config.intervalMin;
   const textoAuto = min <= 0
-    ? 'Sincronización automática desactivada (solo manual).'
+    ? 'Sincronización automática por tiempo desactivada. Los cambios se sincronizan al momento al guardarlos o borrarlos.'
     : 'Se sincroniza automáticamente cada ' + min + ' min, al abrir la app y con el botón de abajo.';
   const opciones = [3, 5, 10, 15]
     .map((v) => '<option value="' + v + '"' + (min === v ? ' selected' : '') + '>Cada ' + v + ' min</option>')
@@ -104,7 +104,7 @@ function vistaConfigurada(config: SyncConfig): string {
     '<select id="syncInterval" onchange="cambiarIntervaloSync()">' +
     '<option value="0"' +
     selOff +
-    '>Desactivada (solo manual)</option>' +
+    '>Desactivada (por tiempo)</option>' +
     opciones +
     '</select>' +
     '<div class="stat-row"><span>Proyecto</span><b>' +

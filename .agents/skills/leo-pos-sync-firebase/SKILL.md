@@ -1,6 +1,6 @@
 ---
 name: leo-pos-sync-firebase
-description: Sincronización del POS Leonides entre dispositivos con Firebase Firestore — motor en src/services/sync.ts, sync incremental bidireccional con LWW (dirty/dirtyDel, getDoc previo, anti-clobber), config/meta en localStorage, lazy-loading de firebase, path pos/{syncToken}/{store}/{gid}, re-idenciación de IDs. Úsala al tocar sync/Ajustes/Sincronización, al cambiar de proyecto Firebase, o al depurar datos duplicados/desaparecidos entre PC y celular.
+description: Sincronización del POS Leonides entre dispositivos con Firebase Firestore — motor en src/services/sync.ts, sync incremental bidireccional con LWW (dirty/dirtyDel, getDoc previo, anti-clobber), sincronizar(config, { soloStores }) con subset de stores en el push y cascade de referencias en el pull, sync-on-write con debounce 1.5s, guard de concurrencia a nivel motor + SyncResult.omitirToast, config/meta en localStorage, lazy-loading de firebase, path pos/{syncToken}/{store}/{gid}, re-idenciación de IDs. Úsala al tocar sync/Ajustes/Sincronización, al cambiar de proyecto Firebase, o al depurar datos duplicados/desaparecidos entre PC y celular.
 license: MIT
 ---
 
@@ -18,12 +18,12 @@ Documentar la sincronización del POS Leonides (PC ↔ celular) con **Firebase F
 - Al reportar datos duplicados, perdidos o sobrescritos entre dispositivos (bugs de merge/pull, pisar ediciones de otro dispositivo).
 - Al cambiar de proyecto Firebase (otro projectId/token) o al activar el sync en un dispositivo nuevo.
 - Al modificar la plantilla de Security Rules o el setup de Firestore (`docs/SYNC_FIREBASE.md`).
-- Al agregar/depurar el auto-sync por timer o el botón "Sincronizar ahora".
+- Al agregar/depurar el auto-sync por timer, el botón "Sincronizar ahora" o el **sync por evento (sync-on-write)** que disparan los CRUD locales.
 
 ## Arquitectura (archivos clave)
 
 ```
-src/services/sync.ts     # Motor de sync (PURA lógica, sin DOM) — push selectivo + LWW, pull con anti-clobber, migración legacy
+src/services/sync.ts     # Motor de sync (PURA lógica, sin DOM) — push selectivo + LWW, pull con anti-clobber, migración legacy, subset de stores, sync-on-write, guard de concurrencia
 src/ui/sync.ts           # Card #cardSync en Ajustes + window globals + timer auto-sync
 src/storage/index.ts     # Dirty-tracking: setSyncTrackingHook / sinTracking sobre el singleton getStorage()
 src/types.ts             # SyncConfig, SyncMeta (dirty/dirtyDel), SyncResult, SyncDoc
@@ -32,7 +32,7 @@ docs/SYNC_FIREBASE.md    # Guía setup Spark + plantilla de rules (apunta a RULE
 package.json             # firebase@^12.17.1 — ÚNICA dependencia de runtime del proyecto
 ```
 
-- **`src/services/sync.ts`**: funciones exportadas `generarCredenciales()`, `cargarConfig()`, `guardarConfig(): boolean`, `borrarConfig()`, `inicializarFirebase()`, `instalarTrackingSync()`, `sincronizar()`. Config en localStorage, meta en key aparte, loader lazy de firebase. Motor incremental + LWW: push selectivo (solo filas nuevas sin gid + `dirty`/`dirtyDel`), `getDoc` previo a cada `setDoc`, tombstones con timestamp real, migración legacy (full-push único).
+- **`src/services/sync.ts`**: funciones exportadas `generarCredenciales()`, `cargarConfig()`, `guardarConfig(): boolean`, `borrarConfig()`, `inicializarFirebase()`, `instalarTrackingSync()`, `sincronizar(config, opciones?)`. Config en localStorage, meta en key aparte, loader lazy de firebase. Motor incremental + LWW: push selectivo (solo filas nuevas sin gid + `dirty`/`dirtyDel`), `getDoc` previo a cada `setDoc`, tombstones con timestamp real, migración legacy (full-push único). Acepta `opciones.soloStores` (subset de stores), tiene guard de concurrencia a nivel motor y un scheduler **sync-on-write** con debounce (ver secciones "Flujo de sync" y "Sync por evento").
 - **`src/storage/index.ts`**: costura del dirty-tracking (decorator `conTracking` sobre el backend real). `setSyncTrackingHook(hook)` registra el hook; `sinTracking(fn)` ejecuta `fn` con el tracking suprimido (contador `trackingDepth`). El hook se dispara tras `put`/`del` exitosos en AMBOS backends (IndexedDB y fallback localStorage) SOLO si `trackingDepth === 0`.
 - **`src/ui/sync.ts`**: `initSync()` cableado en `main.ts` (junto a `initAjustes()`). Expone window globals para los `onclick` inline de `index.html`: `guardarSyncConfig`, `sincronizarAhora`, `desconectarSync`, `copiarReglas`, `cambiarIntervaloSync`.
 - **`src/core/constants.ts`**: `SYNC_KEY = 'leonides_sync_v1'`, `SYNC_META_KEY = 'leonides_sync_meta_v1'`, `RULES_TEMPLATE` (plantilla compartida de Security Rules). La UI importa `RULES_TEMPLATE` y la doc apunta a ella — NO duplicar en otros sitios.
@@ -55,9 +55,11 @@ La meta vive en localStorage (`SYNC_META_KEY = 'leonides_sync_meta_v1'`):
 - `dirtyDel[store][gid]` = timestamp del **BORRADO local pendiente**. El push lo sube como tombstone (`_deleted`) aplicando LWW contra el doc remoto.
 - `lastSyncAt` / `lastPushAt` / `lastPullAt`.
 
-**Tracking**: `main.ts` llama `instalarTrackingSync()` tras `initStorage()`, que registra un hook en `src/storage/index.ts`. El hook corre tras cada `put`/`del` del usuario sobre `getStorage()` y marca `dirty` (put) o `dirtyDel` (del) con `Date.now()` real. Escrituras sin gid conocido (id sin mapear) NO se marcan: el push detecta filas nuevas por ausencia de gid.
+**Tracking**: `main.ts` llama `instalarTrackingSync()` tras `initStorage()`, que registra un hook en `src/storage/index.ts`. El hook corre tras cada `put`/`del` del usuario sobre `getStorage()` y marca `dirty` (put) o `dirtyDel` (del) con `Date.now()` real. Escrituras sin gid conocido (id sin mapear) NO se marcan: el push detecta filas nuevas por ausencia de gid. Además de marcar, el hook dispara el **sync por evento** (sección "Sync por evento"): recolecta la store escrita y programa un sync automático con debounce.
 
 ## Flujo de sync
+
+`sincronizar(config, opciones?)` acepta un **subset de stores**: con `opciones.soloStores` el **PUSH corre SOLO sobre esas stores** (solo sube las afectadas), pero el **PULL se amplía con el cascade de referencias** (`ampliarPullSubset`): si el subset incluye `ventas` → el pull incluye además `clientes` y `productos`; si incluye `abonos` → el pull incluye además `clientes`; sin `ventas`/`abonos` → el pull usa el subset tal cual. Sin la opción se sincronizan las 4 en orden canónico (comportamiento previo intacto). El subset preserva el orden `productos → clientes → ventas → abonos` (necesario para el remapeo de referencias del pull) y `fallidas` refleja solo las stores realmente procesadas. El snapshot/fusión de marcas concurrentes y la migración legacy siempre operan sobre el meta completo, no sobre el subset.
 
 **Push (local → nube) = SELECTIVO + LWW** (`pushLocal`):
 - Solo sube: (a) filas locales **sin gid** (nuevas — se les asigna gid en el momento), (b) gids en `dirty` (modificadas), (c) gids en `dirtyDel` (borradas → tombstone `_deleted` con su timestamp).
@@ -76,8 +78,24 @@ La meta vive en localStorage (`SYNC_META_KEY = 'leonides_sync_meta_v1'`):
 - `capturarSnapshot(meta)` clona `dirty`/`dirtyDel` al INICIO de `sincronizar()` (justo tras `cargarMeta()`).
 - `fusionarMarcasConcurrentes(meta, snapshot)` se llama en 2 puntos: ANTES del pull (para que el guard anti-clobber no pise una edición concurrente) y ANTES de `guardarMeta` (para no perder la marca al persistir). Fusiona SOLO marcas que el hook escribió DURANTE los awaits de red (gid ausente del snapshot o stamp > snapStamp); las del snapshot ya procesadas por el push NO se re-insertan.
 - El **tracking queda ACTIVO durante todo el sync** (si el usuario edita en un await, el hook lo captura). Solo los 3 writes del pull (tombstone del, import put, update put) van envueltos con `sinTracking(...)` **por-operación**.
+- **Guard de concurrencia a nivel motor**: flag module-level `syncEnCurso` envuelve TODO el cuerpo de `sincronizar` en `try/finally`. Si llega otra invocación (manual, timer o sync-on-write) mientras un sync corre → early-return con `{ ok: false, subidos: 0, importados: 0, errores: 0, omitirToast: true, mensaje: 'Ya hay una sincronización en curso.' }`. `omitirToast: true` marca resultados que la UI NO debe toastear (el sync-on-write es silencioso por diseño y no debe interrumpir con un toast de error). `src/ui/sync.ts` ya lo consume en `ejecutarSync` (`if (!res.omitirToast && (...)) toast(...)`).
 
-**Migración legacy** (`necesitaMigracion`): si `meta.dirty == null` Y `gids` no vacío → full-push UNA vez (misma lógica LWW) para poblar la nube y `updatedAt`; se marca migrado (`meta.dirty = {}; meta.dirtyDel = {}`) SOLO si ninguna store falló (`fallidas.length === 0`). Si falla, reintenta completo el siguiente sync.
+**Migración legacy** (`necesitaMigracion`): si `meta.dirty == null` Y `gids` no vacío → full-push UNA vez (misma lógica LWW) para poblar la nube y `updatedAt`; se marca migrado (`meta.dirty = {}; meta.dirtyDel = {}`) SOLO si ninguna store falló (`fallidas.length === 0`). Si falla, reintenta completo el siguiente sync. El **sync por evento** también la respeta: al detectar meta legacy hace un full sync SIN subset en vez de sincronizar solo la store escrita (ver sección "Sync por evento").
+
+## Sync por evento (sync-on-write)
+
+Cada CRUD local (agregar/editar/eliminar → `put`/`del` sobre `getStorage()`) dispara el hook de tracking, que ADEMÁS de marcar `dirty`/`dirtyDel` recolecta la store en un `Set` pendiente module-level (`storesPendientesSync`) y programa un sync automático con **debounce TRAILING de `DEBOUNCE_SYNC_EVENTO_MS = 1500`** (constante interna de sync.ts). Cada write resetea el timer (`programarSyncPorEvento`) → una operación que toca varias stores (ej. una venta descuenta stock: `ventas` + `productos`) coalesce en UNA sola llamada a `sincronizar`. La recolección ocurre ANTES de los early-returns del marcado por gid → las filas nuevas sin gid y las metas legacy también programan el sync (el push las detecta por ausencia de gid).
+
+Al cumplirse el debounce, `ejecutarSyncPorEvento()`:
+- Captura y limpia el `Set` pendiente (`[...pendientes]`, `clear()`).
+- Relee la config **fresca** con `cargarConfig()` (no cachea) — si no hay config/token → nada.
+- Si hay un sync en curso (`syncEnCurso`) → **se descarta silenciosamente**; lo pendiente queda en `dirty`/`dirtyDel` (o sin gid si es fila nueva) y se subirá en el próximo sync.
+- Si `necesitaMigracion(meta)` (meta legacy) → **FULL sync SIN subset** (migración one-time que pobla la nube).
+- Si no → `sincronizar(config, { soloStores: pendientes })` con SOLO las stores afectadas en el push (ej. venta → `ventas` + `productos`; borrado → tombstone de esa store). El pull se amplía con el cascade de referencias: un pull que incluya `ventas`/`abonos` trae también `clientes` (+`productos` para `ventas`) para poder remapear referencias contra clientes/productos conocidos o nuevos.
+- **Silencioso**: fire-and-forget (`void`, sin toasts, sin re-render de la card); en catch → `console.error`.
+- **Independiente de `intervalMin`**: funciona incluso con auto-timer en 0 (`src/ui/sync.ts` no interviene).
+
+**Sin loops de auto-sync**: los writes del pull van envueltos en `sinTracking(...)` por-operación → el hook NO se dispara con datos importados, así que el sync por evento nunca se re-dispara a sí mismo.
 
 ## TRAMPA CRÍTICA — IDs / re-idenciación
 
@@ -117,14 +135,14 @@ Sin esto, un push parcial fallido + pull posterior sobrescribe un edit local má
   - `guardarConfig(config: SyncConfig): boolean` (catch → false; la UI muestra toast de almacenamiento lleno)
   - `borrarConfig(): void`
   - `inicializarFirebase(config): Promise<Firestore | null>`
-  - `instalarTrackingSync(): void` — registra el hook de dirty-tracking; llamada en `main.ts` tras `initStorage()`.
-  - `sincronizar(config): Promise<SyncResult>`
+  - `instalarTrackingSync(): void` — registra el hook de dirty-tracking y dispara el **sync por evento** (debounce 1.5s); llamada en `main.ts` tras `initStorage()`.
+  - `sincronizar(config, opciones?: { soloStores?: StoreName[] }): Promise<SyncResult>` — con `soloStores`, el push sube SOLO ese subset pero el pull se amplía con el cascade de referencias (`clientes`+`productos` si hay `ventas`; `clientes` si hay `abonos`); sin él, las 4 stores. Guard de concurrencia: si ya hay un sync en curso retorna `{ ok: false, omitirToast: true, mensaje: 'Ya hay una sincronización en curso.' }`.
 - **API de storage** (`src/storage/index.ts`): `setSyncTrackingHook(hook: ((store, id, tipo: 'put' | 'del') => void) | null): void` y `sinTracking<T>(fn): Promise<T> | T`. El flag global `setSyncTrackingEnabled` fue **ELIMINADO** — usar `sinTracking` por-operación.
 - **Constantes** (`src/core/constants.ts`): `SYNC_KEY`, `SYNC_META_KEY`, `RULES_TEMPLATE`.
 - **Tipos** (`src/types.ts`):
   - `SyncConfig`: campos firebase opcionales + `syncToken`/`deviceId` obligatorios + `intervalMin`.
   - `SyncMeta`: `version: 1`, `deviceId`, `gids`, `updatedAt`, `dirty?`, `dirtyDel?`, `lastSyncAt`/`lastPushAt`/`lastPullAt`.
-  - `SyncResult`: `ok`, `subidos`, `importados`, `errores`, `fallidas?: string[]`, `mensaje`.
+  - `SyncResult`: `ok`, `subidos`, `importados`, `errores`, `fallidas?: string[]`, `mensaje`, `omitirToast?: boolean` (true → la UI NO debe toastear el resultado; p. ej. el early-return de concurrencia del motor).
   - `SyncDoc<T = unknown>`.
 - **Convenciones**: `intervalMin: 0` = auto-sync desactivado; `null/undefined` = default 5 (minutos). Mensajes/errores en español.
 
@@ -146,4 +164,7 @@ Sin esto, un push parcial fallido + pull posterior sobrescribe un edit local má
 - **`doc.data` sin guard**: los docs remotos pueden tener forma inesperada; validar `if (!doc.data || typeof doc.data !== 'object' || Array.isArray(doc.data)) continue;`.
 - **Token inválido**: el syncToken es segmento de path — validar con la regex antes de guardar (caracteres/espacios inválidos rompen la ruta).
 - **localStorage lleno**: `guardarConfig()` retorna `false` en catch — la UI debe mostrar toast en vez de callar.
+- **Sync-on-write silencioso a propósito**: el auto-sync por evento NO toastea ni re-renderiza; si falla solo sale en consola. Si un cambio local "no se sube", revisa: ¿hay config guardada?, ¿corría un sync manual/timer (el evento se descartó por `syncEnCurso`)?, ¿se cumplió el debounce de 1.5s? El pull NO re-dispara el evento (escribe bajo `sinTracking`).
+- **Subset y referencias cruzadas (cascade del pull)**: al sincronizar un subset que incluya `ventas`/`abonos`, el PULL se amplía automáticamente con las stores de referencia (`clientes` y, para `ventas`, también `productos`) — `ampliarPullSubset` en `src/services/sync.ts`. El PUSH NO se amplía: sube solo las stores afectadas por el evento. El refMap del pull se resuelve contra TODAS las entidades de referencia que trae el pull: (a) entidades importadas en el MISMO pull (gid nuevo → id local recién asignado) y (b) entidades ya conocidas localmente (gid ya mapeado → id local de `SyncMeta.gids`), porque al procesar cada doc remoto de la store de referencia se registra `doc.data.id → id local` tanto para gids nuevos como conocidos. Por eso el cascade importa/lee clientes y productos antes de ventas/abonos (orden canónico `productos → clientes → ventas → abonos`). Una ref que NO está ni importada ni conocida en el pull cae en `0` (p. ej. un cliente borrado en todos los dispositivos o nunca subido). **Límite conocido (preexistente, fuera de alcance)**: si un dispositivo crea una venta que referencia un cliente IMPORTADO de otro dispositivo, el `clienteId` de esa venta usa el id LOCAL del creador, que no coincide con el `data.id` remoto del cliente → en el otro extremo puede caer en `0` incluso en full-sync.
+- **`omitirToast` en la UI**: el `ejecutarSync` de `src/ui/sync.ts` evita el toast cuando `res.omitirToast` es true — el early-return de concurrencia del motor ("Ya hay una sincronización en curso.") NO llega a la UI como toast. El sync por evento además no toca la UI en absoluto (fire-and-forget).
 - **NUNCA import estático de firebase** al tope del archivo: rompe el lazy-loading y engorda el bundle principal.
