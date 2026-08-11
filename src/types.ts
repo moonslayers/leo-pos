@@ -41,6 +41,7 @@ export interface Venta {
   numPagos?: number | null;
   frecuencia?: Frecuencia | null;
   proximaFecha?: number | null;
+  previa?: boolean;
 }
 
 export interface Cliente {

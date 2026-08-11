@@ -212,6 +212,7 @@ nav.bottom{position:fixed;bottom:0;left:0;right:0;background:#fff;display:flex;b
       <div id="totalPorCobrar" style="font-size:30px;font-weight:800;color:#c2410c">$0.00</div>
     </div>
     <button class="btn btn-outline" style="width:100%;margin-bottom:10px" onclick="abrirModalClienteNuevo()">👤 Nuevo cliente</button>
+    <button class="btn btn-outline" style="width:100%;margin-bottom:10px" onclick="abrirModalDeudaPrevia()">📝 Deuda previa</button>
     <div id="listaFiados"></div>
   </section>
 
@@ -439,6 +440,30 @@ nav.bottom{position:fixed;bottom:0;left:0;right:0;background:#fff;display:flex;b
     <label>Nombre *</label><input id="ncNombre" placeholder="Nombre del cliente">
     <label>Teléfono (para recordatorio por WhatsApp)</label><input id="ncTel" inputmode="tel" placeholder="10 dígitos">
     <button class="btn btn-primary" style="width:100%;margin-top:12px" onclick="guardarClienteNuevo()">Guardar</button>
+  </div>
+</div>
+
+<!-- Modal deuda previa (cuaderno) -->
+<div id="mDeudaPrevia" class="modal">
+  <div class="modal-card">
+    <div class="modal-head"><h3>📝 Deuda previa</h3><button class="ci-del" onclick="cerrarModal('mDeudaPrevia')">✕</button></div>
+    <p style="font-size:12.5px;color:#6b7280;margin-bottom:6px">Registra un fiado del cuaderno que el cliente aún debe, sin productos.</p>
+    <label>Cliente existente</label>
+    <div id="listaClientesDeuda"></div>
+    <div id="dpNuevoCliente" style="margin-top:12px">
+      <div style="color:#6b7280;font-size:13px;margin-bottom:8px">O crea un cliente nuevo:</div>
+      <label>Nombre *</label>
+      <input id="dpNombre" placeholder="Nombre del cliente">
+      <label>Teléfono (para recordatorio por WhatsApp)</label>
+      <input id="dpTel" inputmode="tel" placeholder="10 dígitos">
+    </div>
+    <label>Monto de la deuda *</label>
+    <input id="dpMonto" inputmode="decimal" placeholder="0.00" style="font-size:22px;font-weight:700;text-align:center">
+    <label>Abono inicial (opcional)</label>
+    <input id="dpAbono" inputmode="decimal" placeholder="0.00" style="font-size:22px;font-weight:700;text-align:center">
+    <label>Fecha (por defecto hoy)</label>
+    <input type="date" id="dpFecha">
+    <button class="btn btn-primary" style="width:100%;margin-top:12px" onclick="registrarDeudaPrevia()">Registrar</button>
   </div>
 </div>
 

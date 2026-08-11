@@ -1,6 +1,6 @@
 import { $, toast, abrirModal, cerrarModal } from './dom';
 import { registerViewRenderers } from './navigation';
-import { esc, fmt, fmtF, inicioDia } from '../core/format';
+import { esc, fechaLocal, fmt, fmtF, inicioDia } from '../core/format';
 import { FREQ_TXT } from '../core/constants';
 import type { Cliente, DeudaCliente, Movimiento } from '../types';
 import {
@@ -11,7 +11,8 @@ import {
   eliminarMov as eliminarMovSvc,
   guardarAbono as guardarAbonoSvc,
   guardarClienteNuevo as guardarClienteNuevoSvc,
-  recordarWhatsApp as recordarWhatsAppUrl
+  recordarWhatsApp as recordarWhatsAppUrl,
+  registrarDeudaPrevia as registrarDeudaPreviaSvc
 } from '../services/clients';
 
 declare global {
@@ -24,11 +25,15 @@ declare global {
     recordarWhatsApp: (c: Cliente, deuda: number) => void;
     abrirModalClienteNuevo: () => void;
     guardarClienteNuevo: () => Promise<void>;
+    abrirModalDeudaPrevia: () => Promise<void>;
+    seleccionarClienteDeuda: (id: number) => void;
+    registrarDeudaPrevia: () => Promise<void>;
   }
 }
 
 let detalleClienteId: number | null = null;
 let abonoClienteId: number | null = null;
+let deudaPreviaClienteId: number | null = null;
 
 export async function renderFiados(): Promise<void> {
   const lista = await calcularDeudas();
@@ -203,6 +208,75 @@ export function initFiados(): void {
       return;
     }
     cerrarModal('mClienteNuevo');
+    toast(res.mensaje);
+    await renderFiados();
+  };
+
+  window.abrirModalDeudaPrevia = async () => {
+    deudaPreviaClienteId = null;
+    const deudas = await calcularDeudas();
+    deudas.sort((a, b) => a.cliente.nombre.localeCompare(b.cliente.nombre));
+    $('listaClientesDeuda').innerHTML = deudas.length
+      ? deudas
+          .map(m => {
+            const cid = m.cliente.id;
+            if (cid == null) return '';
+            return `<div class="fila-cliente card" id="drow-${cid}" onclick="seleccionarClienteDeuda(${cid})">
+        <div style="flex:1;min-width:0">
+          <div class="p-nom">👤 ${esc(m.cliente.nombre)}</div>
+          ${m.cliente.telefono ? `<div class="p-meta">${esc(m.cliente.telefono)}</div>` : ''}
+        </div>
+        ${m.deuda > 0 ? `<div class="deuda" style="font-size:14px">${fmt(m.deuda)}</div>` : '<div style="color:#059669;font-size:13px">✓ al corriente</div>'}
+      </div>`;
+          })
+          .join('')
+      : '<div style="color:#9ca3af;text-align:center;padding:10px;font-size:13px">Aún no hay clientes. Crea uno abajo 👇</div>';
+    ($('dpNombre') as HTMLInputElement).value = '';
+    ($('dpTel') as HTMLInputElement).value = '';
+    ($('dpMonto') as HTMLInputElement).value = '';
+    ($('dpAbono') as HTMLInputElement).value = '';
+    ($('dpFecha') as HTMLInputElement).value = fechaLocal(new Date());
+    $('dpNuevoCliente').classList.remove('oculto');
+    abrirModal('mDeudaPrevia');
+  };
+
+  window.seleccionarClienteDeuda = id => {
+    if (deudaPreviaClienteId === id) {
+      deudaPreviaClienteId = null;
+      $('drow-' + id).style.border = '';
+      $('dpNuevoCliente').classList.remove('oculto');
+      return;
+    }
+    deudaPreviaClienteId = id;
+    document.querySelectorAll('#listaClientesDeuda .fila-cliente').forEach(row => {
+      (row as HTMLElement).style.border = '';
+    });
+    $('drow-' + id).style.border = '2px solid #d97706';
+    $('dpNuevoCliente').classList.add('oculto');
+  };
+
+  window.registrarDeudaPrevia = async () => {
+    const abonoRaw = ($('dpAbono') as HTMLInputElement).value;
+    const fechaRaw = ($('dpFecha') as HTMLInputElement).value;
+    const input = {
+      monto: parseFloat(($('dpMonto') as HTMLInputElement).value),
+      abono: abonoRaw ? parseFloat(abonoRaw) : undefined,
+      fecha: fechaRaw ? new Date(fechaRaw + 'T12:00:00').getTime() : undefined
+    };
+    const res =
+      deudaPreviaClienteId != null
+        ? await registrarDeudaPreviaSvc({ ...input, clienteId: deudaPreviaClienteId })
+        : await registrarDeudaPreviaSvc({
+            ...input,
+            nombre: ($('dpNombre') as HTMLInputElement).value,
+            telefono: ($('dpTel') as HTMLInputElement).value
+          });
+    if (!res.ok) {
+      toast(res.mensaje);
+      return;
+    }
+    cerrarModal('mDeudaPrevia');
+    deudaPreviaClienteId = null;
     toast(res.mensaje);
     await renderFiados();
   };

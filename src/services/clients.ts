@@ -101,7 +101,9 @@ export async function detalleCliente(id: number): Promise<DetalleClienteResult |
       monto: v.total,
       id: v.id ?? 0,
       det:
-        v.items.map(i => i.cantidad + '× ' + i.nombre).join(', ') +
+        (v.previa
+          ? 'Deuda previa (cuaderno)'
+          : v.items.map(i => i.cantidad + '× ' + i.nombre).join(', ')) +
         (v.abonoInicial ? ' · abono inicial ' + fmt(v.abonoInicial) : '')
     })),
     ...abs.map(a => ({
@@ -162,6 +164,73 @@ export async function guardarClienteNuevo(nombre: string, telefono: string): Pro
   if (!n) return { ok: false, error: 'Escribe el nombre' };
   const id = await crearCliente(n, telefono.trim());
   return { ok: true, id, mensaje: '✅ Cliente guardado' };
+}
+
+export type DeudaPreviaResult =
+  | { ok: true; mensaje: string }
+  | { ok: false; mensaje: string; errores?: string[] };
+
+export async function registrarDeudaPrevia(input: {
+  clienteId?: number;
+  nombre?: string;
+  telefono?: string;
+  monto: number;
+  abono?: number;
+  fecha?: number;
+}): Promise<DeudaPreviaResult> {
+  const { clienteId, monto, abono } = input;
+  if (clienteId == null) {
+    const n = (input.nombre || '').trim();
+    if (!n) return { ok: false, mensaje: 'Escribe el nombre' };
+    input.nombre = n;
+  }
+  if (!monto || monto <= 0) return { ok: false, mensaje: 'Monto inválido' };
+  if (abono != null) {
+    if (Number.isNaN(abono)) return { ok: false, mensaje: 'El abono debe ser un número válido' };
+    if (abono < 0) return { ok: false, mensaje: 'El abono no puede ser negativo' };
+    if (abono > monto) return { ok: false, mensaje: 'El abono no puede ser mayor al monto' };
+  }
+
+  let clienteIdFinal: number;
+  let clienteNombre: string;
+  if (clienteId != null) {
+    const c = await getStorage().get<Cliente>('clientes', clienteId);
+    if (!c) return { ok: false, mensaje: 'Cliente no encontrado' };
+    clienteIdFinal = c.id ?? clienteId;
+    clienteNombre = c.nombre;
+  } else {
+    clienteIdFinal = await crearCliente(input.nombre!, (input.telefono || '').trim());
+    clienteNombre = input.nombre!;
+  }
+
+  const fecha = input.fecha ?? Date.now();
+  const abonoFinal = abono || 0;
+
+  await getStorage().put<Venta>('ventas', {
+    tipo: 'fiado',
+    items: [],
+    clienteId: clienteIdFinal,
+    clienteNombre,
+    total: monto,
+    abonoInicial: abonoFinal,
+    saldo: monto - abonoFinal,
+    plan: null,
+    numPagos: null,
+    frecuencia: null,
+    proximaFecha: null,
+    fecha,
+    previa: true
+  });
+  if (abonoFinal > 0) {
+    await getStorage().put<Abono>('abonos', {
+      clienteId: clienteIdFinal,
+      monto: abonoFinal,
+      fecha,
+      nota: 'Deuda previa'
+    });
+  }
+
+  return { ok: true, mensaje: '📓 Deuda previa registrada: ' + fmt(monto) };
 }
 
 export function recordarWhatsApp(c: Cliente, deuda: number): string {

@@ -12,8 +12,9 @@ export async function renderDashboard(): Promise<void> {
     getStorage().getAll<Abono>('abonos'),
     getStorage().getAll<Producto>('productos')
   ]);
+  const ventasGraf = ventas.filter((v) => !v.previa);
   const hoy = inicioDia(Date.now());
-  const vHoy = ventas.filter((v) => v.fecha >= hoy);
+  const vHoy = ventasGraf.filter((v) => v.fecha >= hoy);
   const totalVHoy = vHoy.reduce((s, v) => s + v.total, 0);
   const contadoHoy = vHoy.filter((v) => v.tipo === 'contado').reduce((s, v) => s + v.total, 0);
   const aHoy = abonos.filter((a) => a.fecha >= hoy).reduce((s, a) => s + a.monto, 0);
@@ -39,7 +40,7 @@ export async function renderDashboard(): Promise<void> {
     d.setDate(d.getDate() - i);
     const ini = d.getTime();
     const fin = ini + 86400000;
-    const total = ventas.filter((v) => v.fecha >= ini && v.fecha < fin).reduce((s, v) => s + v.total, 0);
+    const total = ventasGraf.filter((v) => v.fecha >= ini && v.fecha < fin).reduce((s, v) => s + v.total, 0);
     dias.push({ total, label: new Intl.DateTimeFormat('es-MX', { weekday: 'short' }).format(d) });
   }
   const max = Math.max(1, ...dias.map((d) => d.total));
@@ -59,7 +60,7 @@ export async function renderDashboard(): Promise<void> {
   iniMes.setHours(0, 0, 0, 0);
   const catTotals: Record<string, number> = {};
   CATS.forEach((c) => (catTotals[c.id] = 0));
-  ventas
+  ventasGraf
     .filter((v) => v.fecha >= iniMes.getTime())
     .forEach((v) => {
       (v.items || []).forEach((i) => {
