@@ -12,7 +12,8 @@ export const CATS: Categoria[] = [
   { id: 'ilusion', nombre: 'Lencería Ilusión', emoji: '👙', color: '#ec4899' },
   { id: 'fraiche', nombre: 'Perfume Fraiche', emoji: '🌺', color: '#8b5cf6' },
   { id: 'cosmeticos', nombre: 'Cosméticos', emoji: '💄', color: '#f59e0b' },
-  { id: 'otros', nombre: 'Otros', emoji: '📦', color: '#6b7280' }
+  { id: 'otros', nombre: 'Otros', emoji: '📦', color: '#6b7280' },
+  { id: 'originales', nombre: 'Perfumes Originales', emoji: '💎', color: '#3b82f6' }
 ];
 
 export const FREQ_TXT: Record<Frecuencia, string> = {
