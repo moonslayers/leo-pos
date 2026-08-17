@@ -167,6 +167,12 @@ export function iniciarTour(seccion: Vista, forzar?: boolean): void {
     window.removeEventListener('resize', colocar);
     wrap.remove();
     if (tourActiva && tourActiva._wrap === wrap) tourActiva = null;
+    if (window.vistaActual === 'ventas') {
+      window.setTimeout(() => {
+        const el = $('buscarVenta') as HTMLInputElement | null;
+        if (el) el.focus();
+      }, 50);
+    }
   }
 
   $('tourCerrar').onclick = () => cerrar(true);

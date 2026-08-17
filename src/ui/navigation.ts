@@ -14,6 +14,22 @@ type ViewRenderer = () => void | Promise<void>;
 let renderers: Partial<Record<Vista, ViewRenderer>> = {};
 let vista: Vista = 'ventas';
 
+function enfocarBusquedaVentas(): void {
+  if (window.vistaActual !== 'ventas') return;
+  try {
+    const el = $('buscarVenta') as HTMLInputElement | null;
+    if (el) el.focus();
+  } catch { /* noop */ }
+}
+
+function enfocarBusquedaProductos(): void {
+  if (window.vistaActual !== 'productos') return;
+  try {
+    const el = $('buscarProducto') as HTMLInputElement | null;
+    if (el) el.focus();
+  } catch { /* noop */ }
+}
+
 export function registerViewRenderers(r: Partial<Record<Vista, ViewRenderer>>): void {
   renderers = { ...renderers, ...r };
 }
@@ -35,6 +51,13 @@ export function mostrarVista(nombre: Vista): void {
   const render = renderers[nombre];
   if (render) render();
   window.scrollTo(0, 0);
+  if (nombre === 'ventas') {
+    enfocarBusquedaVentas();
+    window.setTimeout(() => enfocarBusquedaVentas(), 300);
+  } else if (nombre === 'productos') {
+    enfocarBusquedaProductos();
+    window.setTimeout(() => enfocarBusquedaProductos(), 300);
+  }
   window.setTimeout(() => iniciarTour(nombre, false), 550);
 }
 

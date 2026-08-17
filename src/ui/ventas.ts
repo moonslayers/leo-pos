@@ -231,12 +231,27 @@ export async function onCodeForVenta(codigo: string): Promise<void> {
   } else if (confirm('No hay producto con el código ' + codigo + '. ¿Darlo de alta?')) {
     abrirNuevoProducto(codigo);
   }
+  ($('buscarVenta') as HTMLInputElement).value = '';
+  await renderVentaProductos();
 }
 
 /* ================= Registro ================= */
 export function initVentas(): void {
   registerViewRenderers({ ventas: renderVentaProductos });
   $('buscarVenta').addEventListener('input', renderVentaProductos);
+  $('buscarVenta').addEventListener('keydown', async (e: KeyboardEvent) => {
+    if (e.key !== 'Enter') return;
+    const input = $('buscarVenta') as HTMLInputElement;
+    const codigo = input.value.trim();
+    if (!codigo) return;
+    const p = await getStorage().findByCode(codigo);
+    if (p && p.id != null) {
+      await window.agregarCarrito(p.id);
+      input.value = '';
+      await renderVentaProductos();
+      toast('✅ ' + p.nombre + ' agregado');
+    }
+  });
   window.cobrarContado = cobrarContado;
   window.iniciarFiado = iniciarFiado;
   window.seleccionarClienteFiado = seleccionarClienteFiado;
