@@ -45,6 +45,8 @@ src/
     ├── cart.ts            # renderCarrito + registerCartOps
     ├── ventas.ts          # Vista ventas (cobrar, scanner de venta)
     ├── productos.ts       # Vista productos (CRUD, scanner de producto)
+                          #   Flujo del lector de código de barras (hardware vs cámara) y
+                          #   reglas de costo por categoría → ver skill leo-pos-scanner-costos
     ├── fiados.ts          # Vista fiados (abonos, detalle cliente, deuda previa)
     │   #   Lógica de clientes/deudas (crearCliente, guardarAbono, calcularDeudas,
     │   #   detalleCliente, registrarDeudaPrevia) vive en src/services/clients.ts;
